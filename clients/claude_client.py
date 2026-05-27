@@ -97,11 +97,19 @@ def _extract_json(message: Any) -> dict:
     raise ValueError("No text block with structured output in Claude response")
 
 
-def _build_user_message(goal: dict, recent_metrics: dict, today: str) -> str:
+def _build_user_message(
+    goal: dict,
+    recent_metrics,
+    pace_zones: dict,
+    today: str,
+    current_plan: list | None = None,
+    reason: str | None = None,
+) -> str:
     import json
 
     payload = {
         "today": today,
+        "mode": "recalibration" if current_plan is not None else "initial",
         "goal": {
             "sport": goal.get("sport"),
             "race_date": goal.get("race_date"),
@@ -111,27 +119,36 @@ def _build_user_message(goal: dict, recent_metrics: dict, today: str) -> str:
             "time_windows": goal.get("time_windows"),
             "blackout_dates": goal.get("blackout_dates"),
         },
+        "pace_zones_sec_per_km": pace_zones or {},
         "recent_metrics": recent_metrics or {},
     }
+    if current_plan is not None:
+        payload["reason"] = reason
+        payload["current_remaining_plan"] = current_plan
+
+    verb = "Recalibrate" if current_plan is not None else "Generate"
     return (
-        "Generate the training plan for this athlete.\n\nContext:\n"
+        f"{verb} the training plan for this athlete.\n\nContext:\n"
         + json.dumps(payload, default=str, indent=2, sort_keys=True)
     )
 
 
-def generate_plan(
+def _generate(
     goal: dict,
-    recent_metrics: dict | None = None,
-    today: str | None = None,
+    recent_metrics,
+    pace_zones: dict,
+    today: str,
+    current_plan: list | None = None,
+    reason: str | None = None,
 ) -> dict:
-    """Generate a full plan from today to race day. Returns the parsed plan
-    plus token/cost accounting. Raises on API failure (after logging)."""
+    """Run the structured, streamed plan request. Raises on API failure."""
     import time
 
     import anthropic
 
-    today = today or date.today().isoformat()
-    user_message = _build_user_message(goal, recent_metrics or {}, today)
+    user_message = _build_user_message(
+        goal, recent_metrics, pace_zones, today, current_plan, reason
+    )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     started = time.monotonic()
@@ -155,7 +172,7 @@ def generate_plan(
         ) as stream:
             message = stream.get_final_message()
     except Exception as exc:
-        logger.error("claude", "generate_plan failed", {"error": str(exc)})
+        logger.error("claude", "plan request failed", {"error": str(exc)})
         raise
 
     data = _extract_json(message)
@@ -164,7 +181,7 @@ def generate_plan(
 
     logger.info(
         "claude",
-        "generate_plan succeeded",
+        "plan request succeeded",
         {
             "plan_days": len(data.get("plan", [])),
             "tokens_in": _total_input_tokens(message.usage),
@@ -184,3 +201,38 @@ def generate_plan(
         "model": message.model,
         "raw_output": data,
     }
+
+
+def generate_plan(
+    goal: dict,
+    recent_metrics=None,
+    pace_zones: dict | None = None,
+    today: str | None = None,
+) -> dict:
+    """Generate a full plan from today to race day."""
+    return _generate(
+        goal,
+        recent_metrics or {},
+        pace_zones or {},
+        today or date.today().isoformat(),
+    )
+
+
+def recalibrate_plan(
+    goal: dict,
+    current_plan: list,
+    recent_metrics=None,
+    pace_zones: dict | None = None,
+    reason: str | None = None,
+    today: str | None = None,
+) -> dict:
+    """Revise the remaining plan (today onward) given recent metrics and a
+    reason, preserving sound structure."""
+    return _generate(
+        goal,
+        recent_metrics or {},
+        pace_zones or {},
+        today or date.today().isoformat(),
+        current_plan=current_plan,
+        reason=reason,
+    )

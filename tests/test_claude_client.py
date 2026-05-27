@@ -55,7 +55,22 @@ def test_extract_json_finds_text_block():
 
 def test_build_user_message_is_deterministic():
     goal = {"sport": "running", "race_date": "2026-12-06"}
-    a = claude_client._build_user_message(goal, {"hrv": 60}, "2026-05-27")
-    b = claude_client._build_user_message(goal, {"hrv": 60}, "2026-05-27")
+    a = claude_client._build_user_message(goal, {"hrv": 60}, {"easy": 330.0}, "2026-05-27")
+    b = claude_client._build_user_message(goal, {"hrv": 60}, {"easy": 330.0}, "2026-05-27")
     assert a == b  # sorted keys -> stable prefix for prompt caching
     assert "2026-12-06" in a
+    assert '"mode": "initial"' in a
+
+
+def test_build_user_message_recalibration_mode():
+    msg = claude_client._build_user_message(
+        {"race_date": "2026-12-06"},
+        {},
+        {},
+        "2026-05-27",
+        current_plan=[{"date": "2026-05-27", "planned_workout_type": "easy"}],
+        reason="low recovery this week",
+    )
+    assert '"mode": "recalibration"' in msg
+    assert "low recovery this week" in msg
+    assert "current_remaining_plan" in msg
