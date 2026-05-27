@@ -4,8 +4,8 @@ import pandas as pd
 import streamlit as st
 
 from core.auth import require_password
-from repositories import training_plan_repo
-from services import plan_service
+from repositories import progress_tests_repo, training_plan_repo
+from services import plan_service, test_service
 
 require_password()
 
@@ -94,3 +94,38 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
+st.subheader("Progress tests")
+if st.button("Schedule progress tests"):
+    with st.spinner("Asking Claude to schedule progress tests…"):
+        result = test_service.schedule_progress_tests()
+    if result.get("ok"):
+        st.success(f"Scheduled {result['count']} tests.")
+    else:
+        st.error(result.get("error", "Scheduling failed. See the Debug tab."))
+
+try:
+    tests = progress_tests_repo.get_all()
+except Exception as exc:
+    tests = []
+    st.error(f"Could not load progress tests: {exc}")
+
+if not tests:
+    st.caption("No progress tests yet. Click **Schedule progress tests**.")
+for t in tests:
+    label = f"{t.get('scheduled_date')} · {t.get('test_type')}"
+    if t.get("completed"):
+        st.write(f"✓ {label} — {t.get('target_metric')}")
+        continue
+    with st.expander(f"{label} — {t.get('target_metric')}"):
+        if t.get("notes"):
+            st.caption(t["notes"])
+        result_value = st.text_input("Result", key=f"res_{t['id']}", placeholder="e.g. 22:14")
+        notes = st.text_input("Notes", key=f"note_{t['id']}")
+        if st.button("Mark complete", key=f"done_{t['id']}") and result_value.strip():
+            outcome = test_service.log_result(t["id"], result_value.strip(), notes or None)
+            if outcome.get("ok"):
+                st.success("Logged.")
+                st.rerun()
+            else:
+                st.error(outcome.get("error", "Could not log result."))
