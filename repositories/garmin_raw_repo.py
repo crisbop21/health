@@ -13,6 +13,19 @@ def insert(payload: Any, endpoint: str, recorded_at: str | None = None) -> dict:
     return resp.data[0] if resp.data else row
 
 
+def payloads(endpoint: str) -> list:
+    """Return the stored payloads for an endpoint, oldest first."""
+    resp = (
+        get_client()
+        .table("garmin_raw")
+        .select("payload")
+        .eq("endpoint", endpoint)
+        .order("ingested_at")
+        .execute()
+    )
+    return [row.get("payload") for row in (resp.data or [])]
+
+
 def latest_ingested_at() -> str | None:
     resp = (
         get_client()
