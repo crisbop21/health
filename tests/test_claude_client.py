@@ -41,6 +41,21 @@ def test_total_input_tokens_sums_cache():
     assert claude_client._total_input_tokens(usage) == 115
 
 
+def test_first_text_skips_non_text_blocks():
+    message = SimpleNamespace(
+        content=[
+            SimpleNamespace(type="thinking", thinking="…"),
+            SimpleNamespace(type="text", text="the answer"),
+        ]
+    )
+    assert claude_client._first_text(message) == "the answer"
+
+
+def test_first_text_empty_when_no_text():
+    message = SimpleNamespace(content=[SimpleNamespace(type="thinking", thinking="…")])
+    assert claude_client._first_text(message) == ""
+
+
 def test_extract_json_finds_text_block():
     message = SimpleNamespace(
         content=[

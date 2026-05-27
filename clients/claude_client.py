@@ -64,10 +64,14 @@ _PLAN_SCHEMA = {
 }
 
 
-@lru_cache(maxsize=1)
-def _system_prompt() -> str:
-    path = Path(__file__).resolve().parent.parent / "prompts" / "plan_generation.md"
+@lru_cache(maxsize=8)
+def _load_prompt(name: str) -> str:
+    path = Path(__file__).resolve().parent.parent / "prompts" / f"{name}.md"
     return path.read_text(encoding="utf-8")
+
+
+def _system_prompt() -> str:
+    return _load_prompt("plan_generation")
 
 
 def _estimate_cost(model: str, usage: Any) -> float:
@@ -236,3 +240,163 @@ def recalibrate_plan(
         current_plan=current_plan,
         reason=reason,
     )
+
+
+_TEST_TYPES = ["5K time trial", "10K time trial", "long run benchmark", "HRV trend check"]
+
+_PROGRESS_TESTS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "tests": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "scheduled_date": {"type": "string"},
+                    "test_type": {"type": "string", "enum": _TEST_TYPES},
+                    "target_metric": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["scheduled_date", "test_type", "target_metric", "notes"],
+            },
+        }
+    },
+    "required": ["tests"],
+}
+
+
+def _first_text(message) -> str:
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    return ""
+
+
+def _client():
+    import anthropic
+
+    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+
+def ask(question: str, context: dict) -> dict:
+    """Answer a free-text question grounded in the provided context."""
+    import json
+
+    user = (
+        "Context:\n"
+        + json.dumps(context, default=str, sort_keys=True, indent=2)
+        + f"\n\nQuestion: {question}"
+    )
+    try:
+        message = _client().messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            system=[
+                {"type": "text", "text": _load_prompt("qa"), "cache_control": {"type": "ephemeral"}}
+            ],
+            messages=[{"role": "user", "content": user}],
+        )
+    except Exception as exc:
+        logger.error("claude", "ask failed", {"error": str(exc)})
+        raise
+
+    answer = _first_text(message)
+    cost = _estimate_cost(message.model, message.usage)
+    logger.info(
+        "claude",
+        "ask succeeded",
+        {"tokens_out": message.usage.output_tokens, "cost_usd": round(cost, 4)},
+    )
+    return {
+        "answer": answer,
+        "tokens_in": _total_input_tokens(message.usage),
+        "tokens_out": message.usage.output_tokens,
+        "cost_usd": cost,
+        "model": message.model,
+    }
+
+
+def schedule_tests(goal: dict, plan_window: dict, today: str | None = None) -> dict:
+    """Pick 3-5 progress tests across the plan window. Structured output."""
+    import json
+
+    today = today or date.today().isoformat()
+    payload = {"today": today, "goal": goal, "plan_window": plan_window}
+    user = "Schedule progress tests for this athlete.\n\nContext:\n" + json.dumps(
+        payload, default=str, sort_keys=True, indent=2
+    )
+    try:
+        message = _client().messages.create(
+            model=MODEL,
+            max_tokens=4000,
+            thinking={"type": "adaptive"},
+            system=[
+                {
+                    "type": "text",
+                    "text": _load_prompt("progress_tests"),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            output_config={
+                "effort": "medium",
+                "format": {"type": "json_schema", "schema": _PROGRESS_TESTS_SCHEMA},
+            },
+            messages=[{"role": "user", "content": user}],
+        )
+    except Exception as exc:
+        logger.error("claude", "schedule_tests failed", {"error": str(exc)})
+        raise
+
+    data = json.loads(_first_text(message))
+    cost = _estimate_cost(message.model, message.usage)
+    logger.info(
+        "claude",
+        "schedule_tests succeeded",
+        {"count": len(data.get("tests", [])), "cost_usd": round(cost, 4)},
+    )
+    return {
+        "tests": data.get("tests", []),
+        "tokens_in": _total_input_tokens(message.usage),
+        "tokens_out": message.usage.output_tokens,
+        "cost_usd": cost,
+        "model": message.model,
+    }
+
+
+def daily_status(goal: dict, today_item: dict | None, recent_metrics) -> dict:
+    """One-line status for the Today page."""
+    import json
+
+    payload = {
+        "today_workout": today_item or "no planned workout today",
+        "last_metrics": recent_metrics or "no recent metrics",
+        "goal": {"sport": goal.get("sport"), "race_date": goal.get("race_date")} if goal else {},
+    }
+    user = "Write today's status line.\n\nContext:\n" + json.dumps(
+        payload, default=str, sort_keys=True, indent=2
+    )
+    try:
+        message = _client().messages.create(
+            model=MODEL,
+            max_tokens=150,
+            system=[
+                {
+                    "type": "text",
+                    "text": _load_prompt("daily_status"),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user}],
+        )
+    except Exception as exc:
+        logger.error("claude", "daily_status failed", {"error": str(exc)})
+        raise
+
+    cost = _estimate_cost(message.model, message.usage)
+    return {
+        "status": _first_text(message).strip(),
+        "cost_usd": cost,
+        "model": message.model,
+    }
