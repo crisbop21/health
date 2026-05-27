@@ -1,11 +1,27 @@
-"""Training plan orchestration. Reads the active goal, asks Claude for a plan,
-writes the plan rows and an audit revision. Pure Python — no Streamlit."""
+"""Training plan orchestration. Reads the active goal and recent metrics, asks
+Claude for a plan, runs guardrail checks, and writes the plan rows plus an
+audit revision. Pure Python — no Streamlit."""
 
 from __future__ import annotations
 
+from datetime import date
+
 from clients import claude_client
-from core import logger
-from repositories import goals_repo, plan_revisions_repo, training_plan_repo
+from core import guardrails, logger, pace_zones
+from repositories import (
+    daily_metrics_repo,
+    goals_repo,
+    plan_revisions_repo,
+    training_plan_repo,
+)
+
+
+def _recent_metrics(days: int = 14) -> list:
+    try:
+        return daily_metrics_repo.get_recent(days)
+    except Exception as exc:
+        logger.warning("calc", "could not load recent metrics", {"error": str(exc)})
+        return []
 
 
 def _plan_rows_from_result(result: dict, version: int) -> list[dict]:
@@ -27,36 +43,32 @@ def _plan_rows_from_result(result: dict, version: int) -> list[dict]:
     return rows
 
 
-def generate_initial_plan(goal_id: str | None = None, recent_metrics: dict | None = None) -> dict:
-    """Generate the first plan for a goal. Returns a summary dict."""
-    goal = goals_repo.get(goal_id) if goal_id else goals_repo.get_active()
-    if not goal:
-        logger.error("claude", "generate_initial_plan: no active goal")
-        return {"ok": False, "error": "No active goal configured."}
+def _run_guardrails(plan_items: list[dict], goal: dict) -> None:
+    for warning in guardrails.check_plan(plan_items, goal):
+        logger.warning("calc", f"guardrail: {warning['message']}", warning)
 
-    try:
-        result = claude_client.generate_plan(goal, recent_metrics or {})
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
 
+def _persist(result: dict, goal: dict, trigger: str, reason: str, recent_metrics) -> dict:
     version = training_plan_repo.next_version()
     rows = _plan_rows_from_result(result, version)
     count = training_plan_repo.insert_many(rows)
 
+    _run_guardrails(result.get("plan", []), goal)
+
     plan_revisions_repo.insert(
-        trigger="initial",
+        trigger=trigger,
         claude_input={"goal": goal, "recent_metrics": recent_metrics or {}},
         claude_output=result.get("raw_output"),
         tokens_in=result.get("tokens_in"),
         tokens_out=result.get("tokens_out"),
         cost_usd=result.get("cost_usd"),
-        reason="initial plan generation",
+        reason=reason,
     )
 
     logger.info(
         "calc",
-        "generate_initial_plan complete",
-        {"version": version, "days": count, "cost_usd": round(result.get("cost_usd", 0), 4)},
+        f"{trigger} plan persisted",
+        {"version": version, "days": count, "cost_usd": round(result.get("cost_usd") or 0, 4)},
     )
     return {
         "ok": True,
@@ -65,3 +77,50 @@ def generate_initial_plan(goal_id: str | None = None, recent_metrics: dict | Non
         "summary": result.get("summary", ""),
         "cost_usd": result.get("cost_usd"),
     }
+
+
+def generate_initial_plan(goal_id: str | None = None, recent_metrics=None) -> dict:
+    """Generate the first plan for a goal."""
+    goal = goals_repo.get(goal_id) if goal_id else goals_repo.get_active()
+    if not goal:
+        logger.error("claude", "generate_initial_plan: no active goal")
+        return {"ok": False, "error": "No active goal configured."}
+
+    metrics = recent_metrics if recent_metrics is not None else _recent_metrics()
+    zones = pace_zones.pace_zones(goal.get("goal_time_seconds"), goal.get("sport", "running"))
+
+    try:
+        result = claude_client.generate_plan(goal, metrics, zones)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    return _persist(result, goal, trigger="initial", reason="initial plan generation", recent_metrics=metrics)
+
+
+def recalibrate_plan(reason: str = "manual recalibration", recent_metrics=None) -> dict:
+    """Regenerate the remaining plan from today onward based on recent metrics."""
+    goal = goals_repo.get_active()
+    if not goal:
+        logger.error("claude", "recalibrate_plan: no active goal")
+        return {"ok": False, "error": "No active goal configured."}
+
+    try:
+        latest = training_plan_repo.get_plan()
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not load current plan: {exc}"}
+    today = date.today().isoformat()
+    current_remaining = [r for r in latest if (r.get("date") or "") >= today]
+    if not current_remaining:
+        return {"ok": False, "error": "No current plan to recalibrate. Generate one first."}
+
+    metrics = recent_metrics if recent_metrics is not None else _recent_metrics()
+    zones = pace_zones.pace_zones(goal.get("goal_time_seconds"), goal.get("sport", "running"))
+
+    try:
+        result = claude_client.recalibrate_plan(
+            goal, current_remaining, metrics, zones, reason
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    return _persist(result, goal, trigger="recalibration", reason=reason, recent_metrics=metrics)
