@@ -26,12 +26,12 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
    ```
    pip install -r requirements.txt
    ```
-2. Copy secrets templates and fill them in:
+2. Copy the secrets template and fill it in:
    ```
-   cp .env.example .env
    cp .streamlit/secrets.toml.example .streamlit/secrets.toml
    ```
-   Config is read from environment / `.env` first, then Streamlit secrets.
+   Streamlit secrets are the source of truth, both locally and on Streamlit
+   Cloud. (An `os.environ` fallback exists only for tests/CI.)
 3. Create a Supabase project (free tier) and run the schema migration
    `migrations/001_initial_schema.sql` in the Supabase SQL editor. This creates
    all 10 tables.
@@ -56,7 +56,7 @@ when `SUPABASE_URL` and `SUPABASE_KEY` are set.
 
 Host on Streamlit Community Cloud. Add every key from
 `.streamlit/secrets.toml.example` to the Cloud secrets manager. Never commit
-`.env` or `.streamlit/secrets.toml`.
+`.streamlit/secrets.toml`.
 
 ## Build status
 

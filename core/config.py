@@ -1,21 +1,15 @@
-"""Central config. Reads from environment (.env for local dev) first, then
-falls back to Streamlit secrets when running inside Streamlit. No other module
-should read os.environ or st.secrets directly."""
+"""Central config. Streamlit secrets are the source of truth (set in
+.streamlit/secrets.toml locally and the Streamlit Cloud secrets manager). An
+os.environ fallback is kept so tests and CI can inject values without a secrets
+file. No other module should read st.secrets or os.environ directly."""
 
 from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 
 def _get(key: str, default: str | None = None) -> str | None:
-    val = os.environ.get(key)
-    if val:
-        return val
-    # Fall back to Streamlit secrets without requiring Streamlit at import time.
+    # Streamlit secrets first; import lazily so non-UI code stays Streamlit-free.
     try:
         import streamlit as st
 
@@ -23,6 +17,9 @@ def _get(key: str, default: str | None = None) -> str | None:
             return str(st.secrets[key])
     except Exception:
         pass
+    val = os.environ.get(key)
+    if val:
+        return val
     return default
 
 
