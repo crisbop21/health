@@ -113,3 +113,61 @@ def test_expired_helpers():
     assert whoop_client._expired(past) is True
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     assert whoop_client._expired(future) is False
+
+
+def test_collect_retries_once_on_401(monkeypatch):
+    class FakeResp:
+        status_code = 401
+
+    class AuthErr(Exception):
+        response = FakeResp()
+
+    calls = {"tokens": [], "refreshed": 0}
+    tokens = iter(["tok1", "tok2"])
+
+    def fake_token():
+        t = next(tokens)
+        calls["tokens"].append(t)
+        return t
+
+    monkeypatch.setattr(whoop_client, "_valid_access_token", fake_token)
+    monkeypatch.setattr(
+        whoop_client, "refresh", lambda: calls.__setitem__("refreshed", calls["refreshed"] + 1)
+    )
+
+    responses = iter([AuthErr(), {"records": [{"id": 1}], "next_token": None}])
+
+    def fake_get(path, params, token):
+        r = next(responses)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(whoop_client, "_request_get", fake_get)
+
+    result = whoop_client._collect("/recovery", "s", "e")
+
+    assert result["records"] == [{"id": 1}]
+    assert calls["refreshed"] == 1
+    assert calls["tokens"] == ["tok1", "tok2"]
+
+
+def test_collect_does_not_retry_twice_on_401(monkeypatch):
+    class FakeResp:
+        status_code = 401
+
+    class AuthErr(Exception):
+        response = FakeResp()
+
+    monkeypatch.setattr(whoop_client, "_valid_access_token", lambda: "tok")
+    monkeypatch.setattr(whoop_client, "refresh", lambda: None)
+    monkeypatch.setattr(
+        whoop_client, "_request_get", lambda path, params, token: (_ for _ in ()).throw(AuthErr())
+    )
+
+    try:
+        whoop_client._collect("/recovery", "s", "e")
+    except AuthErr:
+        pass
+    else:
+        raise AssertionError("expected AuthErr to propagate after one retry")

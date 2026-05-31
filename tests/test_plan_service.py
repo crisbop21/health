@@ -157,3 +157,41 @@ def test_recalibrate_plan_no_existing_plan(monkeypatch):
     result = plan_service.recalibrate_plan("test")
     assert result["ok"] is False
     assert "No current plan" in result["error"]
+
+
+def test_recalibrate_claude_failure_preserves_existing_plan(monkeypatch):
+    """Failure injection: when Claude fails during recalibration, no new
+    version is written — the existing plan stays as the source of truth."""
+    from datetime import date
+
+    goal = {"id": "g1", "sport": "running", "race_date": "2026-12-06"}
+    monkeypatch.setattr(plan_service.goals_repo, "get_active", lambda: goal)
+    monkeypatch.setattr(
+        plan_service.training_plan_repo,
+        "get_plan",
+        lambda: [{"date": date.today().isoformat(), "version": 2}],
+    )
+
+    writes = {"insert_many": 0, "revision": 0}
+    monkeypatch.setattr(
+        plan_service.training_plan_repo,
+        "insert_many",
+        lambda rows: writes.__setitem__("insert_many", writes["insert_many"] + 1) or len(rows),
+    )
+    monkeypatch.setattr(
+        plan_service.plan_revisions_repo,
+        "insert",
+        lambda **kw: writes.__setitem__("revision", writes["revision"] + 1),
+    )
+
+    def boom(*a, **k):
+        raise RuntimeError("claude timeout")
+
+    monkeypatch.setattr(plan_service.claude_client, "recalibrate_plan", boom)
+
+    result = plan_service.recalibrate_plan("test")
+
+    assert result["ok"] is False
+    assert "claude timeout" in result["error"]
+    assert writes["insert_many"] == 0  # no new plan rows written
+    assert writes["revision"] == 0  # no audit row either

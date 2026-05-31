@@ -12,11 +12,14 @@ def recent(
     limit: int = 200,
     severity: str | None = None,
     source: str | None = None,
+    since: str | None = None,
 ) -> list[dict[str, Any]]:
     query = get_client().table("debug_log").select("*")
     if severity:
         query = query.eq("severity", severity)
     if source:
         query = query.eq("source", source)
+    if since:
+        query = query.gte("event_at", since)
     resp = query.order("event_at", desc=True).limit(limit).execute()
     return resp.data or []

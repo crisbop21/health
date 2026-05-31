@@ -133,18 +133,35 @@ def _request_get(path: str, params: dict, token: str) -> dict:
     return resp.json()
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) == 401
+
+
 def _collect(path: str, start: str, end: str, max_pages: int = 10) -> dict:
     token = _valid_access_token()
     params = {"start": start, "end": end, "limit": 25}
     out: list = []
-    for _ in range(max_pages):
-        data = _request_get(path, params, token)
+    refreshed = False
+    pages = 0
+    while pages < max_pages:
+        try:
+            data = _request_get(path, params, token)
+        except Exception as exc:
+            if _is_auth_error(exc) and not refreshed:
+                logger.warning("whoop", "401 from API; refreshing token and retrying once")
+                refresh()
+                token = _valid_access_token()
+                refreshed = True
+                continue
+            raise
         records = data.get("records", []) if isinstance(data, dict) else data
         out.extend(records or [])
         nxt = data.get("next_token") if isinstance(data, dict) else None
         if not nxt:
             break
         params["nextToken"] = nxt
+        pages += 1
     return {"records": out}
 
 

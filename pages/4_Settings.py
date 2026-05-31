@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 import streamlit as st
 
 from clients import whoop_client
-from core import pace_zones
+from core import health, pace_zones
 from core.auth import require_password
 from repositories import garmin_raw_repo, goals_repo, whoop_raw_repo
 from services import metrics_service, sync_service
@@ -24,6 +24,12 @@ def _parse_window(value: str) -> time:
 require_password()
 
 st.title("Settings")
+
+if not health.db_available():
+    st.error(
+        "Database unavailable. Reads will fail and writes are disabled until "
+        "Supabase is reachable."
+    )
 
 # --- Whoop OAuth callback: handle ?code=... when Whoop redirects back here ---
 if "code" in st.query_params:

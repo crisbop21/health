@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 from core.auth import require_password
-from repositories import progress_tests_repo
+from repositories import debug_log_repo, progress_tests_repo
 from services import qa_service
 
 require_password()
@@ -67,3 +67,13 @@ if tests:
         st.write(f"- {t.get('scheduled_date')}: **{t.get('test_type')}** ({flag}) — {t.get('target_metric')}")
 else:
     st.caption("No progress tests scheduled this week.")
+
+try:
+    errors = debug_log_repo.recent(limit=3, severity="error")
+except Exception:
+    errors = []
+if errors:
+    with st.expander(f"Recent errors ({len(errors)})", expanded=False):
+        for e in errors:
+            when = (e.get("event_at") or "")[:19].replace("T", " ")
+            st.warning(f"{when} · [{e.get('source')}] {e.get('message')}")
