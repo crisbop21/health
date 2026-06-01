@@ -1,7 +1,7 @@
 streamlit>=1.40
 supabase>=2.10
 anthropic>=0.50
-python-garminconnect
+garminconnect
 requests>=2.31
 pandas>=2.2
 pytest>=8.0
