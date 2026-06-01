@@ -16,6 +16,6 @@ st.title("Health & Training Assistant")
 st.caption("Personal training plan, grounded in your Garmin and Whoop data.")
 
 st.write(
-    "Use the sidebar to navigate: **Today**, **Plan**, **Ask**, **Settings**, "
-    "and **Debug**."
+    "Use the sidebar to navigate: **Today**, **Plan**, **Ask**, **Dashboard**, "
+    "**Settings**, and **Debug**."
 )
