@@ -146,3 +146,34 @@ with c2:
             )
         else:
             st.error(f"Recompute failed: {result.get('error')}. See the Debug tab.")
+
+st.markdown("**Historical backfill**")
+st.caption(
+    "Pull a longer history from Garmin and Whoop in one shot. This loops the "
+    "per-day Garmin endpoints, so a year takes a few minutes. Run "
+    "**Recompute metrics** afterwards to derive daily metrics from it."
+)
+b1, b2 = st.columns([1, 2])
+backfill_days = b1.number_input(
+    "Days back", min_value=7, max_value=730, value=365, step=1
+)
+if b2.button(f"Backfill last {int(backfill_days)} days", type="primary"):
+    with st.spinner(f"Backfilling {int(backfill_days)} days from Garmin and Whoop…"):
+        result = sync_service.backfill_all_devices(days=int(backfill_days))
+    g, w = result["garmin"], result["whoop"]
+    (st.success if g.get("ok") else st.error)(
+        f"Garmin: {g.get('rows_written', 0)} rows" if g.get("ok") else f"Garmin: {g.get('error')}"
+    )
+    (st.success if w.get("ok") else st.error)(
+        f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
+    )
+    if result.get("ok"):
+        with st.spinner("Rebuilding daily metrics from the backfilled data…"):
+            recompute = metrics_service.recompute_daily_metrics()
+        if recompute.get("ok"):
+            st.success(
+                f"Recomputed {recompute['daily_metrics']} days, "
+                f"{recompute['workouts']} workouts."
+            )
+        else:
+            st.error(f"Recompute failed: {recompute.get('error')}. See the Debug tab.")
