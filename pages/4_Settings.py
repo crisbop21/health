@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 import streamlit as st
 
 from clients import whoop_client
-from core import health, pace_zones
+from core import health, pace_zones, whoop_oauth
 from core.auth import require_password
 from repositories import garmin_raw_repo, goals_repo, whoop_raw_repo
 from services import metrics_service, sync_service
@@ -32,14 +32,7 @@ if not health.db_available():
     )
 
 # --- Whoop OAuth callback: handle ?code=... when Whoop redirects back here ---
-if "code" in st.query_params:
-    code = st.query_params["code"]
-    try:
-        whoop_client.exchange_code(code)
-        st.query_params.clear()
-        st.success("Whoop connected.")
-    except Exception as exc:
-        st.error(f"Whoop authorization failed: {exc}")
+whoop_oauth.handle_callback()
 
 st.subheader("Goal")
 try:
