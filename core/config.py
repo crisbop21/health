@@ -61,6 +61,12 @@ class Settings:
         return _get("APP_PASSWORD")
 
     @property
+    def alert_webhook_url(self) -> str | None:
+        """Optional Slack/Discord-compatible incoming webhook. When set, the
+        unattended daily sync posts here on real failures."""
+        return _get("ALERT_WEBHOOK_URL")
+
+    @property
     def disable_auth(self) -> bool:
         """Whether the password gate is bypassed. Off by default (gate enabled);
         set DISABLE_AUTH=true only for local debugging. The Whoop OAuth callback

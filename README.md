@@ -34,11 +34,13 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
    Cloud. (An `os.environ` fallback exists only for tests/CI.)
 3. Create a Supabase project (free tier) and run the migrations in
    `migrations/` (`001_initial_schema.sql`, `002_oauth_tokens.sql`,
-   `003_rls_policies.sql`) in order in the Supabase SQL editor. `001` creates
-   the tables; `003` adds the row-level-security policies the API key needs to
-   read and write (without it, syncs fail with "new row violates row-level
-   security policy"). Alternatively, use the project's `service_role` key as
-   `SUPABASE_KEY`, which bypasses RLS.
+   `003_rls_policies.sql`, `004_raw_idempotent.sql`) in order in the Supabase
+   SQL editor. `001` creates the tables; `003` adds the row-level-security
+   policies the API key needs to read and write (without it, syncs fail with
+   "new row violates row-level security policy"); `004` adds the external_id
+   dedupe key so re-syncing doesn't duplicate raw rows (it clears the raw
+   tables, so re-run Backfill afterwards). Alternatively, use the project's
+   `service_role` key as `SUPABASE_KEY`, which bypasses RLS.
 4. Register a Whoop developer app at developer.whoop.com; set the redirect URI
    to match your local (`http://localhost:8501`) and deployed URLs.
 5. Run the app:

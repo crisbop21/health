@@ -171,3 +171,12 @@ def test_collect_does_not_retry_twice_on_401(monkeypatch):
         pass
     else:
         raise AssertionError("expected AuthErr to propagate after one retry")
+
+
+def test_whoop_raw_key_falls_back_to_cycle_id():
+    from repositories import whoop_raw_repo
+
+    # Recovery records carry no top-level id; they key on cycle_id.
+    assert whoop_raw_repo._key({"id": 99, "cycle_id": 7}) == "99"
+    assert whoop_raw_repo._key({"cycle_id": 7}) == "7"
+    assert whoop_raw_repo._key({"score": {}}) is None

@@ -171,12 +171,27 @@ def recompute_daily_metrics() -> dict:
 
         metrics_written = daily_metrics_repo.upsert_many(list(by_date.values()))
 
-        # Workouts: Garmin wins.
+        # Workouts: Garmin wins. Each raw row is now a single activity, but stay
+        # tolerant of legacy list/blob rows. Dedupe by activityId so re-synced
+        # activities never become duplicate workout rows.
         activities: list = []
         for payload in garmin_raw_repo.payloads("activities"):
             if isinstance(payload, list):
                 activities.extend(payload)
-        workouts = [w for w in (_garmin_activity(a) for a in activities) if w]
+            elif isinstance(payload, dict):
+                activities.append(payload)
+        seen: set = set()
+        unique_activities = []
+        for a in activities:
+            if not isinstance(a, dict):
+                continue
+            aid = a.get("activityId")
+            key = aid if aid is not None else id(a)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_activities.append(a)
+        workouts = [w for w in (_garmin_activity(a) for a in unique_activities) if w]
         workouts_repo.delete_source("garmin")
         workouts_written = workouts_repo.insert_many(workouts)
 

@@ -17,26 +17,40 @@ from repositories import garmin_raw_repo, whoop_raw_repo
 
 
 def sync_garmin_range(days: int = 7, client=None) -> dict:
-    """Sync `days` of Garmin activities and daily stats into garmin_raw.
-    Activities come in one date-range call; daily stats are per-day endpoints,
-    so we loop day by day. Returns a summary dict; on failure, ok=False."""
+    """Sync `days` of Garmin activities and daily stats into garmin_raw,
+    idempotently — re-syncing a day or activity overwrites instead of
+    duplicating. Activities come in one date-range call; daily stats are per-day
+    endpoints, so we loop day by day. A single bad day (e.g. a transient 429) is
+    logged and skipped rather than aborting the whole range. Returns a summary
+    dict; on failure, ok=False."""
     now = datetime.now(timezone.utc).isoformat()
     written = 0
+    failed_days = 0
     try:
         client = client or garmin_client.login()
 
         activities = garmin_client.fetch_recent_activities(days=days, client=client)
-        garmin_raw_repo.insert(payload=activities, endpoint="activities", recorded_at=now)
-        written += 1
+        written += garmin_raw_repo.upsert_records(
+            activities, endpoint="activities", key_field="activityId", recorded_at=now
+        )
 
         for offset in range(days):
             day = (date.today() - timedelta(days=offset)).isoformat()
-            stats = garmin_client.fetch_daily_stats(day, client=client)
-            garmin_raw_repo.insert(payload=stats, endpoint="daily_stats", recorded_at=day)
-            written += 1
+            try:
+                stats = garmin_client.fetch_daily_stats(day, client=client)
+            except Exception as exc:
+                failed_days += 1
+                logger.warning("garmin", f"daily stats failed for {day}", {"error": str(exc)})
+                continue
+            written += garmin_raw_repo.upsert_records(
+                [stats], endpoint="daily_stats", key_field="date", recorded_at=now
+            )
 
-        logger.info("garmin", "sync_garmin_range complete", {"days": days, "rows_written": written})
-        return {"ok": True, "rows_written": written}
+        logger.info(
+            "garmin", "sync_garmin_range complete",
+            {"days": days, "rows_written": written, "failed_days": failed_days},
+        )
+        return {"ok": True, "rows_written": written, "failed_days": failed_days}
     except Exception as exc:
         logger.error("garmin", "sync_garmin_range failed", {"days": days, "error": str(exc)})
         return {"ok": False, "error": str(exc), "rows_written": written}
@@ -60,8 +74,9 @@ def _whoop_windows(days: int, window: int = 30):
 
 def sync_whoop_range(days: int = 7) -> dict:
     """Sync `days` of Whoop recovery, sleep, workout, and cycle data into
-    whoop_raw, one raw row per endpoint per date window. Returns a summary
-    dict; on failure, ok=False with the error."""
+    whoop_raw, idempotently (one row per record, keyed by id/cycle_id, so
+    overlapping windows don't duplicate). Returns a summary dict; on failure,
+    ok=False with the error."""
     now = datetime.now(timezone.utc).isoformat()
     written = 0
     try:
@@ -74,8 +89,8 @@ def sync_whoop_range(days: int = 7) -> dict:
         for endpoint, fetch in endpoints:
             for start, end in _whoop_windows(days):
                 payload = fetch(start, end)
-                whoop_raw_repo.insert(payload=payload, endpoint=endpoint, recorded_at=now)
-                written += 1
+                records = payload.get("records", []) if isinstance(payload, dict) else payload
+                written += whoop_raw_repo.upsert_records(records, endpoint=endpoint, recorded_at=now)
 
         logger.info("whoop", "sync_whoop_range complete", {"days": days, "rows_written": written})
         return {"ok": True, "rows_written": written}

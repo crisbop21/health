@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 _SEVERITIES = {"info", "warning", "error"}
-_SOURCES = {"garmin", "whoop", "claude", "db", "calc"}
+_SOURCES = {"garmin", "whoop", "claude", "db", "calc", "sync", "alert"}
 
 _stdout = logging.getLogger("health")
 if not _stdout.handlers:
