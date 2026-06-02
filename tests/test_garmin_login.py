@@ -101,6 +101,22 @@ def test_unusable_token_falls_back_to_password(fake_garminconnect, monkeypatch):
     assert client.logged_in is True  # bad token -> password login
 
 
+def test_password_login_block_gives_actionable_error(fake_garminconnect, monkeypatch):
+    monkeypatch.setattr(garmin_client.oauth_tokens_repo, "get", lambda p: None)
+    monkeypatch.setenv("GARMIN_EMAIL", "a@b.com")
+    monkeypatch.setenv("GARMIN_PASSWORD", "pw")
+
+    class Blocked(FakeGarmin):
+        def login(self):
+            raise RuntimeError("Portal login failed (non-JSON): HTTP 403")
+
+    fake_garminconnect.Garmin = Blocked
+
+    # The raw 403 is wrapped with guidance toward token auth.
+    with pytest.raises(RuntimeError, match="garmin_login"):
+        garmin_client.login()
+
+
 def test_no_token_no_credentials_raises(fake_garminconnect, monkeypatch):
     monkeypatch.setattr(garmin_client.oauth_tokens_repo, "get", lambda p: None)
     monkeypatch.delenv("GARMIN_EMAIL", raising=False)

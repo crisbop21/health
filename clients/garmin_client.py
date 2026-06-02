@@ -110,7 +110,17 @@ def login():
     from garminconnect import Garmin
 
     client = Garmin(settings.garmin_email, settings.garmin_password)
-    client.login()
+    try:
+        client.login()
+    except Exception as exc:
+        # Garmin blocks password logins from cloud IPs (CAPTCHA / HTTP 403).
+        # Surface the real fix instead of the cryptic transport error.
+        raise RuntimeError(
+            f"Garmin password login failed ({exc}). Garmin blocks logins from "
+            "datacenter IPs — mint a token locally with "
+            "`python -m scripts.garmin_login` and set GARMIN_TOKENS (it's also "
+            "saved to the DB for the app to reuse)."
+        ) from exc
     logger.info("garmin", "login succeeded (password)")
     try:
         _store_token(client.garth.dumps())
