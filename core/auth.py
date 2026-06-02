@@ -1,5 +1,9 @@
 """Simple single-user password gate. Every page calls require_password() at the
-top; it halts rendering until the correct APP_PASSWORD is entered."""
+top; it halts rendering until the correct APP_PASSWORD is entered.
+
+The gate can be turned off by setting DISABLE_AUTH=true in secrets/env — useful
+while debugging the Whoop OAuth redirect, which can otherwise be interrupted by
+the password form on a fresh session. Re-enable by removing that flag."""
 
 from __future__ import annotations
 
@@ -11,6 +15,10 @@ from core.config import settings
 
 
 def require_password() -> None:
+    if settings.disable_auth:
+        st.caption("⚠️ Password gate disabled (DISABLE_AUTH). Anyone with the URL can access this app.")
+        return
+
     if st.session_state.get("authenticated"):
         return
 
