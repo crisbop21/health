@@ -52,20 +52,23 @@ def test_daily_stats_one_endpoint_failure_is_isolated():
 
 def test_sync_writes_raw_rows(monkeypatch):
     monkeypatch.setattr(garmin_client, "login", lambda: FakeGarmin())
-    inserts = []
+    upserts = []
     monkeypatch.setattr(
         garmin_raw_repo,
-        "insert",
-        lambda payload, endpoint, recorded_at=None: inserts.append((endpoint, payload)),
+        "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: upserts.append((endpoint, key_field)) or len(records),
     )
 
     result = sync_service.sync_garmin_last_7_days()
 
     assert result["ok"] is True
-    assert result["rows_written"] == 8  # 1 activities + 7 daily_stats
-    endpoints = [e for e, _ in inserts]
+    assert result["rows_written"] == 8  # 1 activity + 7 daily_stats
+    endpoints = [e for e, _ in upserts]
     assert endpoints.count("activities") == 1
     assert endpoints.count("daily_stats") == 7
+    # Activities dedupe on activityId; daily stats on the day.
+    assert ("activities", "activityId") in upserts
+    assert ("daily_stats", "date") in upserts
 
 
 def test_sync_handles_login_failure_gracefully(monkeypatch):

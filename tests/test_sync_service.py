@@ -8,22 +8,22 @@ from services import sync_service
 
 
 def test_sync_whoop_writes_four_endpoints(monkeypatch):
-    monkeypatch.setattr(whoop_client, "fetch_recoveries", lambda s, e: {"records": [1]})
-    monkeypatch.setattr(whoop_client, "fetch_sleeps", lambda s, e: {"records": [2]})
-    monkeypatch.setattr(whoop_client, "fetch_workouts", lambda s, e: {"records": [3]})
-    monkeypatch.setattr(whoop_client, "fetch_cycles", lambda s, e: {"records": [4]})
-    inserts = []
+    monkeypatch.setattr(whoop_client, "fetch_recoveries", lambda s, e: {"records": [{"id": 1}]})
+    monkeypatch.setattr(whoop_client, "fetch_sleeps", lambda s, e: {"records": [{"id": 2}]})
+    monkeypatch.setattr(whoop_client, "fetch_workouts", lambda s, e: {"records": [{"id": 3}]})
+    monkeypatch.setattr(whoop_client, "fetch_cycles", lambda s, e: {"records": [{"id": 4}]})
+    upserts = []
     monkeypatch.setattr(
         whoop_raw_repo,
-        "insert",
-        lambda payload, endpoint, recorded_at=None: inserts.append(endpoint),
+        "upsert_records",
+        lambda records, endpoint, recorded_at=None: upserts.append(endpoint) or len(records),
     )
 
     result = sync_service.sync_whoop_last_7_days()
 
     assert result["ok"] is True
     assert result["rows_written"] == 4
-    assert set(inserts) == {"recovery", "sleep", "workout", "cycle"}
+    assert set(upserts) == {"recovery", "sleep", "workout", "cycle"}
 
 
 def test_sync_whoop_failure_is_graceful(monkeypatch):
@@ -60,24 +60,22 @@ def test_whoop_windows_span_full_range_without_overlap():
 
 
 def test_sync_whoop_range_chunks_each_endpoint(monkeypatch):
-    calls = []
+    # One record per window so the per-record upsert count is deterministic.
     for name in ("fetch_recoveries", "fetch_sleeps", "fetch_workouts", "fetch_cycles"):
-        monkeypatch.setattr(
-            whoop_client, name, lambda s, e: calls.append((s, e)) or {"records": []}
-        )
-    inserts = []
+        monkeypatch.setattr(whoop_client, name, lambda s, e: {"records": [{"id": s}]})
+    upserts = []
     monkeypatch.setattr(
         whoop_raw_repo,
-        "insert",
-        lambda payload, endpoint, recorded_at=None: inserts.append(endpoint),
+        "upsert_records",
+        lambda records, endpoint, recorded_at=None: upserts.append(endpoint) or len(records),
     )
 
     result = sync_service.sync_whoop_range(days=365)
 
-    # 13 windows per endpoint across 4 endpoints.
+    # 13 windows per endpoint across 4 endpoints, one record each.
     assert result["ok"] is True
     assert result["rows_written"] == 13 * 4
-    assert inserts.count("recovery") == 13
+    assert upserts.count("recovery") == 13
 
 
 def test_sync_garmin_range_loops_days(monkeypatch):
@@ -88,19 +86,44 @@ def test_sync_garmin_range_loops_days(monkeypatch):
     monkeypatch.setattr(
         garmin_client, "fetch_daily_stats", lambda day, client=None: {"date": day}
     )
-    inserts = []
+    upserts = []
     monkeypatch.setattr(
         garmin_raw_repo,
-        "insert",
-        lambda payload, endpoint, recorded_at=None: inserts.append(endpoint),
+        "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: upserts.append(endpoint) or len(records),
     )
 
     result = sync_service.sync_garmin_range(days=30)
 
-    # One activities row + one daily_stats row per day.
+    # No activities; one daily_stats record upserted per day.
     assert result["ok"] is True
-    assert result["rows_written"] == 1 + 30
-    assert inserts.count("daily_stats") == 30
+    assert result["rows_written"] == 30
+    assert result["failed_days"] == 0
+    assert upserts.count("daily_stats") == 30
+
+
+def test_sync_garmin_range_skips_failed_days(monkeypatch):
+    monkeypatch.setattr(garmin_client, "login", lambda: object())
+    monkeypatch.setattr(garmin_client, "fetch_recent_activities", lambda days, client=None: [])
+
+    def flaky(day, client=None):
+        if day.endswith("1"):  # fail on days ending in 1
+            raise RuntimeError("429 rate limited")
+        return {"date": day}
+
+    monkeypatch.setattr(garmin_client, "fetch_daily_stats", flaky)
+    monkeypatch.setattr(
+        garmin_raw_repo,
+        "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: len(records),
+    )
+
+    result = sync_service.sync_garmin_range(days=10)
+
+    # Still ok overall; failed days counted, not fatal.
+    assert result["ok"] is True
+    assert result["failed_days"] >= 1
+    assert result["rows_written"] == 10 - result["failed_days"]
 
 
 def test_backfill_defaults_to_a_year(monkeypatch):

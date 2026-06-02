@@ -104,6 +104,16 @@ def _safe(fn, default=None):
         return default
 
 
+def _garmin_msg(g: dict) -> str:
+    if not g.get("ok"):
+        return f"Garmin: {g.get('error')}"
+    msg = f"Garmin: {g.get('rows_written', 0)} rows"
+    failed = g.get("failed_days") or 0
+    if failed:
+        msg += f" · {failed} day(s) skipped (rate-limited; re-run to fill)"
+    return msg
+
+
 col_g, col_w = st.columns(2)
 with col_g:
     st.markdown("**Garmin**")
@@ -124,9 +134,7 @@ with c1:
         with st.spinner("Syncing Garmin and Whoop…"):
             result = sync_service.sync_all_devices()
         g, w = result["garmin"], result["whoop"]
-        (st.success if g.get("ok") else st.error)(
-            f"Garmin: {g.get('rows_written', 0)} rows" if g.get("ok") else f"Garmin: {g.get('error')}"
-        )
+        (st.success if g.get("ok") else st.error)(_garmin_msg(g))
         (st.success if w.get("ok") else st.error)(
             f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
         )
@@ -155,9 +163,7 @@ if b2.button(f"Backfill last {int(backfill_days)} days", type="primary"):
     with st.spinner(f"Backfilling {int(backfill_days)} days from Garmin and Whoop…"):
         result = sync_service.backfill_all_devices(days=int(backfill_days))
     g, w = result["garmin"], result["whoop"]
-    (st.success if g.get("ok") else st.error)(
-        f"Garmin: {g.get('rows_written', 0)} rows" if g.get("ok") else f"Garmin: {g.get('error')}"
-    )
+    (st.success if g.get("ok") else st.error)(_garmin_msg(g))
     (st.success if w.get("ok") else st.error)(
         f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
     )
