@@ -7,10 +7,15 @@ screen gates on the app password and links into the sections.
 import streamlit as st
 
 from core.auth import require_password
+from core import whoop_oauth
 
 st.set_page_config(page_title="Health & Training Assistant", layout="wide")
 
 require_password()
+
+# Whoop redirects to the app's base URL (this home page) with ?code=..., so the
+# OAuth callback must be handled here as well as on Settings.
+whoop_oauth.handle_callback()
 
 st.title("Health & Training Assistant")
 st.caption("Personal training plan, grounded in your Garmin and Whoop data.")

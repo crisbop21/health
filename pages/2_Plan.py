@@ -91,7 +91,7 @@ def _highlight_today(row):
 
 st.dataframe(
     view.style.apply(_highlight_today, axis=1),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 

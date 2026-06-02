@@ -56,7 +56,7 @@ cov_rows = [
     {"Metric": labels[f], "Days": cov[f], "Coverage": f"{round(100 * cov[f] / total)}%"}
     for f in labels
 ]
-st.dataframe(pd.DataFrame(cov_rows), hide_index=True, use_container_width=True)
+st.dataframe(pd.DataFrame(cov_rows), hide_index=True, width="stretch")
 
 src_bits = []
 for name, d in (("HRV", m["source_hrv"]), ("Sleep", m["source_sleep"])):
@@ -110,6 +110,6 @@ if workouts:
         recent["duration_min"] = (recent["duration_seconds"] / 60).round(0)
         recent = recent.drop(columns=["duration_seconds"])
     st.caption("Recent workouts")
-    st.dataframe(recent, hide_index=True, use_container_width=True)
+    st.dataframe(recent, hide_index=True, width="stretch")
 else:
     st.caption("No workouts in this window.")
