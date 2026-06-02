@@ -10,7 +10,7 @@ fields it actually returned."""
 
 from __future__ import annotations
 
-from core import logger
+from core import logger, pace_zones
 from repositories import (
     daily_metrics_repo,
     garmin_raw_repo,
@@ -84,17 +84,27 @@ def _garmin_hrv(payload: dict) -> float | None:
     return summary.get("lastNightAvg")
 
 
+def _avg_pace(distance_km: float | None, duration_seconds: float | None) -> str | None:
+    """Average pace as M:SS/km, derived from distance and duration. None when
+    either is missing/zero (e.g. strength workouts carry no distance)."""
+    if not distance_km or not duration_seconds:
+        return None
+    return pace_zones.format_pace(duration_seconds / distance_km)
+
+
 def _garmin_activity(act: dict) -> dict | None:
     day = _date_of(act.get("startTimeLocal") or act.get("startTimeGMT"))
     if not day:
         return None
     distance_m = act.get("distance")
+    distance_km = round(distance_m / 1000, 3) if distance_m else None
+    duration_seconds = int(act["duration"]) if act.get("duration") else None
     return {
         "date": day,
         "sport": (act.get("activityType") or {}).get("typeKey"),
-        "distance_km": round(distance_m / 1000, 3) if distance_m else None,
-        "duration_seconds": int(act["duration"]) if act.get("duration") else None,
-        "avg_pace": None,
+        "distance_km": distance_km,
+        "duration_seconds": duration_seconds,
+        "avg_pace": _avg_pace(distance_km, duration_seconds),
         "avg_hr": act.get("averageHR"),
         "max_hr": act.get("maxHR"),
         "source": "garmin",

@@ -13,8 +13,17 @@ from repositories import daily_metrics_repo, workouts_repo
 # range query simple without a dedicated min-date endpoint.
 _EPOCH = "2000-01-01"
 
-# daily_metrics fields worth reporting coverage on, in display order.
-_METRIC_FIELDS = ("hrv_ms", "resting_hr", "sleep_hours", "recovery_score", "strain")
+# daily_metrics fields worth reporting on, in display order, with the metadata
+# the UI needs: label, unit, and trend direction (True = higher is better,
+# False = lower is better, None = neutral/load metric).
+METRIC_META: dict[str, dict] = {
+    "hrv_ms": {"label": "HRV", "unit": "ms", "higher_better": True},
+    "resting_hr": {"label": "Resting HR", "unit": "bpm", "higher_better": False},
+    "sleep_hours": {"label": "Sleep", "unit": "h", "higher_better": True},
+    "recovery_score": {"label": "Recovery", "unit": "", "higher_better": True},
+    "strain": {"label": "Strain", "unit": "", "higher_better": None},
+}
+_METRIC_FIELDS = tuple(METRIC_META)
 
 
 def _today() -> str:
@@ -78,6 +87,42 @@ def _count_by(rows: list[dict], key: str) -> dict[str, int]:
         if v:
             out[v] = out.get(v, 0) + 1
     return out
+
+
+def snapshot() -> dict:
+    """Latest value of each metric and its change vs the prior 7-day average,
+    for the KPI cards. ok=False with an error on failure."""
+    try:
+        rows = daily_metrics_repo.get_range(
+            (date.today() - timedelta(days=21)).isoformat(), _today()
+        )
+        out: dict[str, dict] = {}
+        for field in _METRIC_FIELDS:
+            series = sorted(
+                (r["date"], r[field]) for r in rows
+                if r.get("date") and r.get(field) is not None
+            )
+            if not series:
+                out[field] = {"latest": None, "date": None, "delta": None}
+                continue
+            latest_date, latest = series[-1]
+            latest_d = date.fromisoformat(latest_date)
+            # Baseline: the up-to-7 days immediately before the latest reading.
+            prior = [
+                v for d, v in series[:-1]
+                if 0 < (latest_d - date.fromisoformat(d)).days <= 7
+            ]
+            baseline = sum(prior) / len(prior) if prior else None
+            out[field] = {
+                "latest": round(float(latest), 1),
+                "date": latest_date,
+                "baseline": round(baseline, 1) if baseline is not None else None,
+                "delta": round(float(latest) - baseline, 1) if baseline is not None else None,
+            }
+        return {"ok": True, "metrics": out}
+    except Exception as exc:
+        logger.error("calc", "dashboard snapshot failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc)}
 
 
 def metrics_series(days: int = 365) -> list[dict]:

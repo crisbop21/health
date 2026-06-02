@@ -116,7 +116,14 @@ def test_garmin_activities_become_workouts(monkeypatch):
     assert w["sport"] == "running"
     assert w["distance_km"] == 10.0
     assert w["duration_seconds"] == 3000
+    assert w["avg_pace"] == "5:00/km"  # 3000 s over 10 km
     assert w["source"] == "garmin"
+
+
+def test_avg_pace_is_none_without_distance():
+    assert metrics_service._avg_pace(None, 1800) is None
+    assert metrics_service._avg_pace(0, 1800) is None
+    assert metrics_service._avg_pace(5.0, None) is None
 
 
 def test_recompute_handles_failure(monkeypatch):

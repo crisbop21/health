@@ -65,6 +65,36 @@ def test_overview_handles_failure(monkeypatch):
     assert "db down" in result["error"]
 
 
+def test_snapshot_latest_and_delta(monkeypatch):
+    # Latest HRV is 70; the prior week averages (60+50)/2 = 55 -> delta +15.
+    rows = [
+        {"date": "2026-01-05", "hrv_ms": 60, "resting_hr": 50},
+        {"date": "2026-01-08", "hrv_ms": 50, "resting_hr": 52},
+        {"date": "2026-01-11", "hrv_ms": 70, "resting_hr": 47},
+    ]
+    monkeypatch.setattr(daily_metrics_repo, "get_range", lambda s, e: rows)
+
+    result = dashboard_service.snapshot()
+
+    assert result["ok"] is True
+    hrv = result["metrics"]["hrv_ms"]
+    assert hrv["latest"] == 70
+    assert hrv["date"] == "2026-01-11"
+    assert hrv["baseline"] == 55.0
+    assert hrv["delta"] == 15.0
+    # A field with no data reports None cleanly.
+    assert result["metrics"]["sleep_hours"]["latest"] is None
+
+
+def test_snapshot_single_reading_has_no_delta(monkeypatch):
+    monkeypatch.setattr(
+        daily_metrics_repo, "get_range", lambda s, e: [{"date": "2026-01-11", "strain": 12.0}]
+    )
+    result = dashboard_service.snapshot()
+    assert result["metrics"]["strain"]["latest"] == 12.0
+    assert result["metrics"]["strain"]["delta"] is None
+
+
 def test_series_use_window(monkeypatch):
     captured = {}
 
