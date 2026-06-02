@@ -62,10 +62,10 @@ class Settings:
 
     @property
     def disable_auth(self) -> bool:
-        """Whether the password gate is bypassed. Temporarily defaults to on
-        while debugging the Whoop OAuth flow; set DISABLE_AUTH=false (and an
-        APP_PASSWORD) to re-enable the gate."""
-        return str(_get("DISABLE_AUTH", "true")).strip().lower() in ("1", "true", "yes", "on")
+        """Whether the password gate is bypassed. Off by default (gate enabled);
+        set DISABLE_AUTH=true only for local debugging. The Whoop OAuth callback
+        now runs before the gate, so re-connecting works with auth on."""
+        return str(_get("DISABLE_AUTH", "false")).strip().lower() in ("1", "true", "yes", "on")
 
     def missing(self, keys: list[str]) -> list[str]:
         """Return the subset of required setting names that are unset."""

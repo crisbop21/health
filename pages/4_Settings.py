@@ -21,6 +21,10 @@ def _parse_window(value: str) -> time:
     except (ValueError, TypeError):
         return time(6, 0)
 
+# --- Whoop OAuth callback: handle ?code=... before the gate, so authorizing
+# from a fresh session is never interrupted by the password form. ---
+whoop_oauth.handle_callback()
+
 require_password()
 
 st.title("Settings")
@@ -30,9 +34,6 @@ if not health.db_available():
         "Database unavailable. Reads will fail and writes are disabled until "
         "Supabase is reachable."
     )
-
-# --- Whoop OAuth callback: handle ?code=... when Whoop redirects back here ---
-whoop_oauth.handle_callback()
 
 st.subheader("Goal")
 try:

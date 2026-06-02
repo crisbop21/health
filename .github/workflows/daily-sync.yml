@@ -1,0 +1,40 @@
+name: Daily sync
+
+# Pulls recent Garmin/Whoop data and rebuilds derived metrics on a schedule, so
+# the app has fresh data without anyone clicking "Sync" in the UI.
+on:
+  schedule:
+    # 06:30 UTC daily. Adjust to land after your overnight Whoop/Garmin upload.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Lookback days to sync"
+        required: false
+        default: "7"
+
+concurrency:
+  group: daily-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+      GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+      WHOOP_CLIENT_ID: ${{ secrets.WHOOP_CLIENT_ID }}
+      WHOOP_CLIENT_SECRET: ${{ secrets.WHOOP_CLIENT_SECRET }}
+      WHOOP_REDIRECT_URI: ${{ secrets.WHOOP_REDIRECT_URI }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run daily sync
+        run: python -m scripts.daily_sync "${{ github.event.inputs.days || '7' }}"
