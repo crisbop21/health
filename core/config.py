@@ -53,6 +53,15 @@ class Settings:
         return _get("GARMIN_TOKENS")
 
     @property
+    def garmin_pacing_seconds(self) -> float:
+        """Optional delay between per-day Garmin fetches during a sync/backfill.
+        0 by default; set to ~1-2s for large backfills to avoid rate limits."""
+        try:
+            return float(_get("GARMIN_PACING_SECONDS", "0") or 0)
+        except ValueError:
+            return 0.0
+
+    @property
     def whoop_client_id(self) -> str | None:
         return _get("WHOOP_CLIENT_ID")
 

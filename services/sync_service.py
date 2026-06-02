@@ -9,10 +9,12 @@ date, workouts deleted-then-reinserted), so re-running a backfill is safe."""
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from clients import garmin_client, whoop_client
 from core import logger
+from core.config import settings
 from repositories import garmin_raw_repo, whoop_raw_repo
 
 
@@ -45,6 +47,8 @@ def sync_garmin_range(days: int = 7, client=None) -> dict:
             written += garmin_raw_repo.upsert_records(
                 [stats], endpoint="daily_stats", key_field="date", recorded_at=now
             )
+            if settings.garmin_pacing_seconds:
+                time.sleep(settings.garmin_pacing_seconds)
 
         logger.info(
             "garmin", "sync_garmin_range complete",

@@ -152,8 +152,9 @@ with c2:
 st.markdown("**Historical backfill**")
 st.caption(
     "Pull a longer history from Garmin and Whoop in one shot. This loops the "
-    "per-day Garmin endpoints, so a year takes a few minutes. Run "
-    "**Recompute metrics** afterwards to derive daily metrics from it."
+    "per-day Garmin endpoints, so a year takes a few minutes. Garmin rate-limits "
+    "bursts — if older days come back empty, re-run (it's idempotent), or set "
+    "`GARMIN_PACING_SECONDS` to 1-2. Run **Recompute metrics** afterwards."
 )
 b1, b2 = st.columns([1, 2])
 backfill_days = b1.number_input(

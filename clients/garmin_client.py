@@ -5,6 +5,7 @@ is manual FIT import or Whoop-only mode (see the technical brief)."""
 
 from __future__ import annotations
 
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -13,6 +14,42 @@ from core.config import settings
 from repositories import oauth_tokens_repo
 
 PROVIDER = "garmin"
+
+# Garmin throttles bursts of requests (a 365-day backfill makes ~4 calls/day).
+# Back off and retry on rate limits so throttled days complete instead of being
+# stored empty, which otherwise leaves only the most-recent days populated.
+_RATE_LIMIT_RETRIES = 4
+_RATE_LIMIT_BASE_DELAY = 4.0  # seconds; doubles each retry (4, 8, 16, 32)
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "toomanyrequests" in name
+        or "429" in msg
+        or "too many requests" in msg
+        or "rate limit" in msg
+    )
+
+
+def _call(fn, *args):
+    """Call a Garmin endpoint, backing off and retrying on rate limits."""
+    delay = _RATE_LIMIT_BASE_DELAY
+    for attempt in range(_RATE_LIMIT_RETRIES):
+        try:
+            return fn(*args)
+        except Exception as exc:
+            if _is_rate_limit(exc) and attempt < _RATE_LIMIT_RETRIES - 1:
+                logger.warning(
+                    "garmin",
+                    f"rate limited on {getattr(fn, '__name__', 'call')}; backing off {delay}s",
+                )
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
+    return fn(*args)  # pragma: no cover - exhausted retries re-raise above
 
 
 def _stored_token() -> str | None:
@@ -86,7 +123,7 @@ def fetch_recent_activities(days: int = 7, client=None) -> list[Any]:
     client = client or login()
     end = date.today()
     start = end - timedelta(days=days)
-    activities = client.get_activities_by_date(start.isoformat(), end.isoformat())
+    activities = _call(client.get_activities_by_date, start.isoformat(), end.isoformat())
     logger.info(
         "garmin",
         "fetched activities",
@@ -102,7 +139,7 @@ def fetch_daily_stats(day: str, client=None) -> dict[str, Any]:
 
     def _safe(fn, *args):
         try:
-            return fn(*args)
+            return _call(fn, *args)  # retries rate limits before giving up
         except Exception as exc:  # one endpoint failing shouldn't sink the day
             logger.warning("garmin", f"{fn.__name__} failed for {day}", {"error": str(exc)})
             return None
