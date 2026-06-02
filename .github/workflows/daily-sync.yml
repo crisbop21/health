@@ -28,6 +28,8 @@ jobs:
       WHOOP_CLIENT_ID: ${{ secrets.WHOOP_CLIENT_ID }}
       WHOOP_CLIENT_SECRET: ${{ secrets.WHOOP_CLIENT_SECRET }}
       WHOOP_REDIRECT_URI: ${{ secrets.WHOOP_REDIRECT_URI }}
+      # Optional: Slack/Discord webhook for failure alerts.
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,3 +40,6 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run daily sync
         run: python -m scripts.daily_sync "${{ github.event.inputs.days || '7' }}"
+      - name: Note failure in run summary
+        if: failure()
+        run: echo "❌ Daily sync failed — see logs above. GitHub also emails the repo owner on failed runs." >> "$GITHUB_STEP_SUMMARY"
