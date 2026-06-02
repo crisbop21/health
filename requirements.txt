@@ -4,4 +4,5 @@ anthropic>=0.50
 garminconnect
 requests>=2.31
 pandas>=2.2
+altair>=5.0
 pytest>=8.0
