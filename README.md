@@ -43,11 +43,17 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
    `service_role` key as `SUPABASE_KEY`, which bypasses RLS.
 4. Register a Whoop developer app at developer.whoop.com; set the redirect URI
    to match your local (`http://localhost:8501`) and deployed URLs.
-5. Run the app:
+5. Garmin (cloud): Garmin CAPTCHA-blocks email/password logins from datacenter
+   IPs (Streamlit Cloud, GitHub Actions). Run `python -m scripts.garmin_login`
+   **locally** once to mint a long-lived OAuth token; it's saved to Supabase
+   (and printed so you can set it as the `GARMIN_TOKENS` secret). The app and
+   the daily sync then resume that session instead of logging in with a
+   password. Re-run when it eventually expires (~1 year).
+6. Run the app:
    ```
    streamlit run streamlit_app.py
    ```
-   The app is gated by `APP_PASSWORD`.
+   The app is gated by `APP_PASSWORD` (unless `DISABLE_AUTH=true`).
 
 ## Tests
 

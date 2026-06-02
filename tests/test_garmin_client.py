@@ -50,6 +50,35 @@ def test_daily_stats_one_endpoint_failure_is_isolated():
     assert stats["stats"]["steps"] == 8000
 
 
+def test_rate_limit_is_retried_then_succeeds(monkeypatch):
+    monkeypatch.setattr(garmin_client.time, "sleep", lambda s: None)  # no real waiting
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("429 Too Many Requests")
+        return "ok"
+
+    assert garmin_client._call(flaky) == "ok"
+    assert calls["n"] == 3  # two rate-limit retries, then success
+
+
+def test_non_rate_limit_error_is_not_retried(monkeypatch):
+    monkeypatch.setattr(garmin_client.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def boom():
+        calls["n"] += 1
+        raise RuntimeError("garmin hiccup")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="hiccup"):
+        garmin_client._call(boom)
+    assert calls["n"] == 1  # generic errors fail fast, no backoff
+
+
 def test_sync_writes_raw_rows(monkeypatch):
     monkeypatch.setattr(garmin_client, "login", lambda: FakeGarmin())
     upserts = []
