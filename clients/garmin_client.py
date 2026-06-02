@@ -10,21 +10,75 @@ from typing import Any
 
 from core import logger
 from core.config import settings
+from repositories import oauth_tokens_repo
+
+PROVIDER = "garmin"
+
+
+def _stored_token() -> str | None:
+    """The saved Garmin OAuth token blob: the GARMIN_TOKENS env value if set,
+    otherwise whatever a prior login persisted in oauth_tokens."""
+    if settings.garmin_tokens:
+        return settings.garmin_tokens
+    try:
+        row = oauth_tokens_repo.get(PROVIDER)
+    except Exception as exc:
+        logger.warning("garmin", "could not read stored Garmin token", {"error": str(exc)})
+        return None
+    return row.get("access_token") if row else None
+
+
+def _store_token(token: str) -> None:
+    try:
+        oauth_tokens_repo.upsert(PROVIDER, access_token=token, refresh_token=None, expires_at=None)
+    except Exception as exc:
+        logger.warning("garmin", "could not persist Garmin token", {"error": str(exc)})
+
+
+def _resume(token: str):
+    """Build a Garmin client from a saved garth token blob — no password login,
+    so Garmin's datacenter-IP CAPTCHA is never hit."""
+    from garminconnect import Garmin
+
+    client = Garmin()
+    client.garth.loads(token)
+    return client
 
 
 def login():
-    """Authenticate and return a logged-in Garmin client. MFA-protected
-    accounts may require interactive handling; revisit if login starts
-    returning a challenge instead of a session."""
-    from garminconnect import Garmin
+    """Return a logged-in Garmin client. Prefers a saved OAuth token (which
+    avoids the CAPTCHA Garmin throws at password logins from cloud IPs); falls
+    back to email/password and persists the resulting token for next time.
+
+    Generate a token without a cloud CAPTCHA by running
+    `python -m scripts.garmin_login` locally."""
+    token = _stored_token()
+    if token:
+        try:
+            client = _resume(token)
+            logger.info("garmin", "resumed session from saved token")
+            return client
+        except Exception as exc:
+            logger.warning(
+                "garmin", "saved token unusable; trying password login", {"error": str(exc)}
+            )
 
     missing = settings.missing(["garmin_email", "garmin_password"])
     if missing:
-        raise RuntimeError(f"Garmin credentials not configured: {missing}")
+        raise RuntimeError(
+            f"Garmin not configured: no saved token and missing {missing}. "
+            "Run `python -m scripts.garmin_login` locally to mint a token."
+        )
+
+    from garminconnect import Garmin
 
     client = Garmin(settings.garmin_email, settings.garmin_password)
     client.login()
-    logger.info("garmin", "login succeeded")
+    logger.info("garmin", "login succeeded (password)")
+    try:
+        _store_token(client.garth.dumps())
+    except Exception as exc:
+        logger.warning("garmin", "could not dump Garmin token", {"error": str(exc)})
     return client
 
 

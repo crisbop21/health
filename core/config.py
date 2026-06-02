@@ -45,6 +45,14 @@ class Settings:
         return _get("GARMIN_PASSWORD")
 
     @property
+    def garmin_tokens(self) -> str | None:
+        """Optional pre-minted Garmin OAuth token blob (garth dump). When set,
+        the client resumes this session instead of doing a password login,
+        which Garmin CAPTCHA-blocks from datacenter IPs. Generate it locally
+        with `python -m scripts.garmin_login`."""
+        return _get("GARMIN_TOKENS")
+
+    @property
     def whoop_client_id(self) -> str | None:
         return _get("WHOOP_CLIENT_ID")
 

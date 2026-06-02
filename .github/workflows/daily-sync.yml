@@ -25,6 +25,9 @@ jobs:
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
       GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+      # Preferred: a token minted locally via scripts/garmin_login (password
+      # login is CAPTCHA-blocked from GitHub's IPs). Falls back to the DB token.
+      GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
       WHOOP_CLIENT_ID: ${{ secrets.WHOOP_CLIENT_ID }}
       WHOOP_CLIENT_SECRET: ${{ secrets.WHOOP_CLIENT_SECRET }}
       WHOOP_REDIRECT_URI: ${{ secrets.WHOOP_REDIRECT_URI }}
