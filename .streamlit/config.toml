@@ -1,0 +1,9 @@
+# App theme. Streamlit Cloud and local runs both read this. Keep keys to the
+# widely-supported set so older Streamlit versions don't choke.
+[theme]
+base = "light"
+primaryColor = "#e03131"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f8"
+textColor = "#1f2933"
+font = "sans serif"

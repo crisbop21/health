@@ -11,7 +11,26 @@ from core.auth import require_password
 from services import dashboard_service
 from services.dashboard_service import METRIC_META
 
+st.set_page_config(page_title="Dashboard · Health & Training", layout="wide")
 require_password()
+
+# Presentation-only polish: cards for metrics, tighter spacing, softer chrome.
+# set_page_config above must stay the first Streamlit call on this page.
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 2.2rem; max-width: 1500px;}
+      div[data-testid="stMetric"] {
+        background: #ffffff; border: 1px solid #e7e9ee; border-radius: 14px;
+        padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+      }
+      div[data-testid="stMetricValue"] {font-size: 1.65rem; font-weight: 600;}
+      div[data-testid="stMetricLabel"] {opacity: 0.7; font-weight: 600;}
+      h2 {padding-top: 0.4rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("Data & History")
 st.caption("Your latest readings, how they're trending, and training volume.")
@@ -104,11 +123,22 @@ if not df.empty:
     df = df.set_index("date").sort_index()
 
 
+def _empty(title: str):
+    """A balanced, intentional-looking placeholder so a column whose metric has
+    no data doesn't read as a broken/empty half next to a populated sibling."""
+    st.markdown(
+        f"<div style='border:1px dashed #d6d9dd;border-radius:14px;"
+        f"padding:74px 16px;text-align:center;color:#98a0aa;font-size:0.9rem;'>"
+        f"No {title.lower()} data in this window</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _trend_chart(col: str, title: str, color: str, bands=None, rule=None):
     """Daily points + a 7-day rolling-average line, with optional zone bands
     (list of (low, high, color)) and a reference rule value."""
     if df.empty or col not in df or not df[col].notna().any():
-        st.caption(f"No {title.lower()} data in this window.")
+        _empty(title)
         return
     d = df[[col]].dropna().reset_index()
     d["roll"] = d[col].rolling(7, min_periods=1).mean()
