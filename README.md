@@ -53,7 +53,7 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
    ```
    streamlit run streamlit_app.py
    ```
-   The app is gated by `APP_PASSWORD` (unless `DISABLE_AUTH=true`).
+   The app has no password gate — anyone who can reach the URL can use it.
 
 ## Tests
 
