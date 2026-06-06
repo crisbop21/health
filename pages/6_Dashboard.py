@@ -19,14 +19,30 @@ require_password()
 st.markdown(
     """
     <style>
-      .block-container {padding-top: 2.2rem; max-width: 1500px;}
+      .block-container {padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1380px;}
+
+      /* Type ramp: a real hierarchy instead of uniformly heavy headers. */
+      h1 {font-size: 1.95rem !important; font-weight: 750; letter-spacing: -0.02em;
+          margin-bottom: 0.1rem;}
+      h3 {font-size: 1.02rem !important; font-weight: 700; color: #3a4250;
+          letter-spacing: -0.01em; margin: 1.7rem 0 0.55rem !important;}
+
+      /* Populated KPI cards (only live metrics render as st.metric) get an
+         accent edge so the real reading is what draws the eye. */
       div[data-testid="stMetric"] {
-        background: #ffffff; border: 1px solid #e7e9ee; border-radius: 14px;
-        padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+        background: #ffffff; border: 1px solid #e8eaee;
+        border-left: 4px solid #e03131; border-radius: 14px;
+        padding: 16px 18px 14px; box-shadow: 0 1px 2px rgba(16,24,40,0.05);
       }
-      div[data-testid="stMetricValue"] {font-size: 1.65rem; font-weight: 600;}
-      div[data-testid="stMetricLabel"] {opacity: 0.7; font-weight: 600;}
-      h2 {padding-top: 0.4rem;}
+      div[data-testid="stMetricLabel"] p {
+        font-size: 0.72rem !important; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.06em; color: #8a909b;
+      }
+      div[data-testid="stMetricValue"] {
+        font-size: 1.9rem !important; font-weight: 700; color: #1f2933;
+      }
+
+      div[data-testid="stTabs"] button[role="tab"] {font-weight: 600;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -97,8 +113,21 @@ cols = st.columns(len(METRIC_META))
 for col, (field, meta) in zip(cols, METRIC_META.items()):
     s = snap_metrics.get(field, {})
     latest = s.get("latest")
+    if latest is None:
+        # Absent metrics recede into a muted card so they don't out-shout the
+        # live reading next to them.
+        col.markdown(
+            f"<div style='background:#fafbfc;border:1px solid #edf0f3;"
+            f"border-radius:14px;padding:16px 18px;min-height:104px;'>"
+            f"<div style='font-size:0.72rem;font-weight:700;text-transform:uppercase;"
+            f"letter-spacing:0.06em;color:#aeb4bd;'>{meta['label']}</div>"
+            f"<div style='color:#c4c9d0;font-size:1.05rem;margin-top:20px;'>No data yet</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        continue
     unit = meta["unit"]
-    value = f"{latest:g}{(' ' + unit) if unit else ''}" if latest is not None else "—"
+    value = f"{latest:g}{(' ' + unit) if unit else ''}"
     delta = s.get("delta")
     delta_str = f"{delta:+g}" if delta else None
     # Lower-is-better metrics (resting HR) invert the green/red; strain is neutral.
@@ -129,9 +158,9 @@ def _empty(title: str, height: int = 200):
     Fixed height matches the chart height so columns line up."""
     st.markdown(
         f"<div style='display:flex;align-items:center;justify-content:center;"
-        f"height:{height}px;border:1px dashed #d6d9dd;border-radius:14px;"
-        f"color:#98a0aa;font-size:0.9rem;text-align:center;line-height:1.4;'>"
-        f"No {title.lower()} data<br>in this window</div>",
+        f"height:{height}px;background:#fafbfc;border:1px solid #edf0f3;"
+        f"border-radius:14px;color:#aeb4bd;font-size:0.9rem;text-align:center;"
+        f"line-height:1.5;'>No {title.lower()} data<br>in this window</div>",
         unsafe_allow_html=True,
     )
 
