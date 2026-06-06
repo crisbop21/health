@@ -123,13 +123,15 @@ if not df.empty:
     df = df.set_index("date").sort_index()
 
 
-def _empty(title: str):
+def _empty(title: str, height: int = 200):
     """A balanced, intentional-looking placeholder so a column whose metric has
-    no data doesn't read as a broken/empty half next to a populated sibling."""
+    no data aligns with its populated siblings instead of reading as broken.
+    Fixed height matches the chart height so columns line up."""
     st.markdown(
-        f"<div style='border:1px dashed #d6d9dd;border-radius:14px;"
-        f"padding:74px 16px;text-align:center;color:#98a0aa;font-size:0.9rem;'>"
-        f"No {title.lower()} data in this window</div>",
+        f"<div style='display:flex;align-items:center;justify-content:center;"
+        f"height:{height}px;border:1px dashed #d6d9dd;border-radius:14px;"
+        f"color:#98a0aa;font-size:0.9rem;text-align:center;line-height:1.4;'>"
+        f"No {title.lower()} data<br>in this window</div>",
         unsafe_allow_html=True,
     )
 
@@ -179,12 +181,15 @@ st.subheader("Trends")
 tab_rec, tab_sleep, tab_train = st.tabs(["Recovery & HRV", "Sleep", "Training load"])
 
 with tab_rec:
-    _trend_chart("recovery_score", "Recovery", "#2e7d32",
-                 bands=[(0, 33, "red"), (33, 66, "orange"), (66, 100, "green")])
-    c1, c2 = st.columns(2)
+    # Equal columns so the metric that has data isn't buried beneath a giant
+    # empty box; placeholders for empty metrics stay modest and aligned.
+    c1, c2, c3 = st.columns(3)
     with c1:
-        _trend_chart("hrv_ms", "HRV (ms)", "#1565c0")
+        _trend_chart("recovery_score", "Recovery", "#2e7d32",
+                     bands=[(0, 33, "red"), (33, 66, "orange"), (66, 100, "green")])
     with c2:
+        _trend_chart("hrv_ms", "HRV (ms)", "#1565c0")
+    with c3:
         _trend_chart("resting_hr", "Resting HR (bpm)", "#c62828")
 
 with tab_sleep:
