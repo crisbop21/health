@@ -215,9 +215,10 @@ if wrows:
                 .reset_index()
             )
             chart = (
-                alt.Chart(weekly).mark_bar(color="#00897b")
+                alt.Chart(weekly)
+                .mark_bar(color="#00897b", size=34, cornerRadiusEnd=4)
                 .encode(
-                    x=alt.X("date:T", title=None),
+                    x=alt.X("date:T", title=None, axis=alt.Axis(format="%b %d")),
                     y=alt.Y("distance_km:Q", title="km / week"),
                     tooltip=[alt.Tooltip("date:T", title="week of"),
                              alt.Tooltip("distance_km:Q", title="km", format=".1f")],
