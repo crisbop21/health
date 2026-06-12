@@ -121,6 +121,59 @@ def test_collect_follows_long_paginations(monkeypatch):
     assert [r["id"] for r in result["records"]] == list(range(12))
 
 
+def test_collect_backs_off_on_429_and_succeeds(monkeypatch):
+    """A long backfill fires hundreds of requests; transient 429s must be
+    retried with a pause, not abort the whole window."""
+
+    class FakeResp:
+        status_code = 429
+        headers = {"Retry-After": "7"}
+
+    class RateErr(Exception):
+        response = FakeResp()
+
+    naps = []
+    monkeypatch.setattr(whoop_client.time, "sleep", lambda s: naps.append(s))
+    monkeypatch.setattr(whoop_client, "_valid_access_token", lambda: "tok")
+    responses = iter([RateErr(), RateErr(), {"records": [{"id": 1}], "next_token": None}])
+
+    def fake_get(path, params, token):
+        r = next(responses)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(whoop_client, "_request_get", fake_get)
+
+    result = whoop_client._collect("/recovery", "s", "e")
+
+    assert result["records"] == [{"id": 1}]
+    assert naps == [7, 7]  # honored Retry-After both times
+
+
+def test_collect_gives_up_after_max_rate_limit_retries(monkeypatch):
+    class FakeResp:
+        status_code = 429
+        headers = {}
+
+    class RateErr(Exception):
+        response = FakeResp()
+
+    monkeypatch.setattr(whoop_client.time, "sleep", lambda s: None)
+    monkeypatch.setattr(whoop_client, "_valid_access_token", lambda: "tok")
+    monkeypatch.setattr(
+        whoop_client, "_request_get",
+        lambda path, params, token: (_ for _ in ()).throw(RateErr()),
+    )
+
+    try:
+        whoop_client._collect("/recovery", "s", "e")
+    except RateErr:
+        pass
+    else:
+        raise AssertionError("expected the 429 to propagate once retries are exhausted")
+
+
 def test_expired_helpers():
     assert whoop_client._expired(None) is True
     assert whoop_client._expired("not-a-date") is True

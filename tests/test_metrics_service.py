@@ -175,6 +175,23 @@ def test_whoop_workouts_fill_garmin_less_days_only(monkeypatch):
     assert w["max_hr"] == 170
 
 
+def test_duplicate_raw_records_never_duplicate_upsert_rows(monkeypatch):
+    """Legacy blob rows and per-record rows can hold the same workout id; a
+    single upsert batch repeating (source, external_id) makes Postgres fail
+    with 'ON CONFLICT DO UPDATE command cannot affect row a second time'."""
+    captured = _wire(
+        monkeypatch,
+        whoop={"workout": [WHOOP_WORKOUTS[0], dict(WHOOP_WORKOUTS[0])]},
+        garmin={"activities": [GARMIN_ACTIVITIES[0], list(GARMIN_ACTIVITIES[0])]},
+    )
+    metrics_service.recompute_daily_metrics()
+
+    keys = [(w["source"], w["external_id"]) for w in captured["workouts"]]
+    assert len(keys) == len(set(keys))
+    assert ("whoop", "w-1") in keys
+    assert ("garmin", "111") in keys
+
+
 def test_full_recompute_replaces_both_workout_sources(monkeypatch):
     captured = _wire(monkeypatch)
     metrics_service.recompute_daily_metrics()

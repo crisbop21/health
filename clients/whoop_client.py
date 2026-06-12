@@ -4,6 +4,7 @@ Returns raw payloads; parsing happens in metrics_service."""
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 from core import logger
@@ -15,6 +16,11 @@ TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 API_BASE = "https://api.prod.whoop.com/developer/v2"
 SCOPES = "offline read:recovery read:sleep read:workout read:cycles read:profile"
 PROVIDER = "whoop"
+
+# Long backfills fire hundreds of requests; Whoop throttles bursts. Back off
+# and retry so a transient 429 doesn't abort a whole window.
+_RATE_LIMIT_RETRIES = 4
+_RATE_LIMIT_BASE_DELAY = 2.0  # seconds; doubles each retry unless Retry-After says otherwise
 
 
 # --- OAuth ---------------------------------------------------------------
@@ -145,6 +151,20 @@ def _is_auth_error(exc: Exception) -> bool:
     return getattr(resp, "status_code", None) == 401
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) == 429
+
+
+def _retry_after_seconds(exc: Exception, fallback: float) -> float:
+    """Honor the server's Retry-After header when present."""
+    resp = getattr(exc, "response", None)
+    try:
+        return float((getattr(resp, "headers", None) or {}).get("Retry-After"))
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _collect(path: str, start: str, end: str, max_pages: int = 40) -> dict:
     """Fetch every page in [start, end]. max_pages is a runaway-loop guard, not
     a working limit — at 25 records/page it allows 1000 records per window,
@@ -154,10 +174,19 @@ def _collect(path: str, start: str, end: str, max_pages: int = 40) -> dict:
     out: list = []
     refreshed = False
     pages = 0
+    rate_retries = 0
+    delay = _RATE_LIMIT_BASE_DELAY
     while pages < max_pages:
         try:
             data = _request_get(path, params, token)
         except Exception as exc:
+            if _is_rate_limit(exc) and rate_retries < _RATE_LIMIT_RETRIES:
+                rate_retries += 1
+                nap = _retry_after_seconds(exc, delay)
+                logger.warning("whoop", f"429 from API; backing off {nap}s and retrying")
+                time.sleep(nap)
+                delay *= 2
+                continue
             if _is_auth_error(exc) and not refreshed:
                 logger.warning("whoop", "401 from API; refreshing token and retrying once")
                 refresh()

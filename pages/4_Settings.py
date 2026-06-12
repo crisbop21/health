@@ -111,9 +111,22 @@ if goal.get("goal_time_seconds") and (goal.get("sport") or "running") == "runnin
 st.subheader("Devices")
 
 
+def _migration_hint(error) -> str:
+    """Schema-shaped errors almost always mean a migration hasn't been run."""
+    e = str(error or "").lower()
+    if any(sig in e for sig in ("schema cache", "pgrst204", "on conflict",
+                                "unique or exclusion constraint")):
+        return (
+            " ⚠️ This looks like a pending database migration — run the files in "
+            "`migrations/` in order in the Supabase SQL editor (they're idempotent), "
+            "then retry."
+        )
+    return ""
+
+
 def _garmin_msg(g: dict) -> str:
     if not g.get("ok"):
-        return f"Garmin: {g.get('error')}"
+        return f"Garmin: {g.get('error')}{_migration_hint(g.get('error'))}"
     msg = f"Garmin: {g.get('rows_written', 0)} rows"
     failed = g.get("failed_days") or 0
     if failed:
@@ -133,7 +146,9 @@ def _show_sync_outcome(result: dict) -> None:
     g, w = result["garmin"], result["whoop"]
     (st.success if g.get("ok") else st.error)(_garmin_msg(g))
     (st.success if w.get("ok") else st.error)(
-        f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
+        f"Whoop: {w.get('rows_written', 0)} rows"
+        if w.get("ok")
+        else f"Whoop: {w.get('error')}{_migration_hint(w.get('error'))}"
     )
 
 
@@ -143,7 +158,10 @@ def _recompute_and_show() -> None:
     if result.get("ok"):
         st.success(f"Recomputed {result['daily_metrics']} days, {result['workouts']} workouts.")
     else:
-        st.error(f"Recompute failed: {result.get('error')}. See the Debug tab.")
+        st.error(
+            f"Recompute failed: {result.get('error')}."
+            f"{_migration_hint(result.get('error'))} See the Debug tab."
+        )
 
 
 status = sync_service.device_status()
