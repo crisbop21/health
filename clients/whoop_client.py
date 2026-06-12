@@ -138,7 +138,10 @@ def _is_auth_error(exc: Exception) -> bool:
     return getattr(resp, "status_code", None) == 401
 
 
-def _collect(path: str, start: str, end: str, max_pages: int = 10) -> dict:
+def _collect(path: str, start: str, end: str, max_pages: int = 40) -> dict:
+    """Fetch every page in [start, end]. max_pages is a runaway-loop guard, not
+    a working limit — at 25 records/page it allows 1000 records per window,
+    far beyond what a 30-day sync window can contain."""
     token = _valid_access_token()
     params = {"start": start, "end": end, "limit": 25}
     out: list = []

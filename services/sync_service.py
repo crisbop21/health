@@ -18,13 +18,14 @@ from core.config import settings
 from repositories import garmin_raw_repo, whoop_raw_repo
 
 
-def sync_garmin_range(days: int = 7, client=None) -> dict:
+def sync_garmin_range(days: int = 7, client=None, on_progress=None) -> dict:
     """Sync `days` of Garmin activities and daily stats into garmin_raw,
     idempotently — re-syncing a day or activity overwrites instead of
     duplicating. Activities come in one date-range call; daily stats are per-day
     endpoints, so we loop day by day. A single bad day (e.g. a transient 429) is
-    logged and skipped rather than aborting the whole range. Returns a summary
-    dict; on failure, ok=False."""
+    logged and skipped rather than aborting the whole range. `on_progress`
+    (callable of (days_done, days_total)) lets the UI show a bar during long
+    backfills. Returns a summary dict; on failure, ok=False."""
     now = datetime.now(timezone.utc).isoformat()
     written = 0
     failed_days = 0
@@ -44,6 +45,9 @@ def sync_garmin_range(days: int = 7, client=None) -> dict:
                 failed_days += 1
                 logger.warning("garmin", f"daily stats failed for {day}", {"error": str(exc)})
                 continue
+            finally:
+                if on_progress:
+                    on_progress(offset + 1, days)
             written += garmin_raw_repo.upsert_records(
                 [stats], endpoint="daily_stats", key_field="date", recorded_at=now
             )
@@ -63,7 +67,7 @@ def sync_garmin_range(days: int = 7, client=None) -> dict:
 def _whoop_windows(days: int, window: int = 30):
     """Yield non-overlapping (start, end) ISO-8601 UTC pairs spanning the last
     `days`, chunked into `window`-day slices. Chunking keeps each Whoop request
-    well inside the client's pagination cap (25/page, 10 pages)."""
+    well inside the client's pagination cap (25/page, 40 pages)."""
     end = date.today()
     start = end - timedelta(days=days)
     cur = start
@@ -111,16 +115,42 @@ def sync_whoop_last_7_days() -> dict:
     return sync_whoop_range(7)
 
 
-def sync_all_devices(days: int = 7) -> dict:
+def sync_all_devices(days: int = 7, on_progress=None) -> dict:
     """Sync both devices over the last `days`. Each device's failure is
-    isolated; the overall ok is true only if both succeeded."""
-    garmin = sync_garmin_range(days)
+    isolated; the overall ok is true only if both succeeded. `on_progress`
+    tracks the slow per-day Garmin loop (Whoop syncs in a few range calls)."""
+    garmin = sync_garmin_range(days, on_progress=on_progress)
     whoop = sync_whoop_range(days)
     return {"ok": garmin["ok"] and whoop["ok"], "garmin": garmin, "whoop": whoop}
 
 
-def backfill_all_devices(days: int = 365) -> dict:
+def backfill_all_devices(days: int = 365, on_progress=None) -> dict:
     """One-off historical pull: sync both devices over the last `days`
     (default a full year). Same isolation rules as sync_all_devices."""
     logger.info("sync", "backfill_all_devices starting", {"days": days})
-    return sync_all_devices(days)
+    return sync_all_devices(days, on_progress=on_progress)
+
+
+def device_status() -> dict:
+    """Connection/freshness summary for the Settings page: last ingest time and
+    stored raw-row count per device, plus Whoop's OAuth state. Read failures
+    degrade to empty values rather than raising into the UI."""
+
+    def _safe(fn, default=None):
+        try:
+            return fn()
+        except Exception as exc:
+            logger.warning("sync", "device_status read failed", {"error": str(exc)})
+            return default
+
+    return {
+        "garmin": {
+            "last_sync": _safe(garmin_raw_repo.latest_ingested_at),
+            "rows": _safe(garmin_raw_repo.count),
+        },
+        "whoop": {
+            "connected": _safe(whoop_client.is_connected, False),
+            "last_sync": _safe(whoop_raw_repo.latest_ingested_at),
+            "rows": _safe(whoop_raw_repo.count),
+        },
+    }

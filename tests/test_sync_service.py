@@ -38,10 +38,10 @@ def test_sync_whoop_failure_is_graceful(monkeypatch):
 
 def test_sync_all_devices_combines(monkeypatch):
     monkeypatch.setattr(
-        sync_service, "sync_garmin_range", lambda days=7: {"ok": True, "rows_written": 8}
+        sync_service, "sync_garmin_range", lambda days=7, **kw: {"ok": True, "rows_written": 8}
     )
     monkeypatch.setattr(
-        sync_service, "sync_whoop_range", lambda days=7: {"ok": False, "error": "no whoop"}
+        sync_service, "sync_whoop_range", lambda days=7, **kw: {"ok": False, "error": "no whoop"}
     )
 
     result = sync_service.sync_all_devices()
@@ -126,14 +126,63 @@ def test_sync_garmin_range_skips_failed_days(monkeypatch):
     assert result["rows_written"] == 10 - result["failed_days"]
 
 
+def test_sync_garmin_range_reports_progress(monkeypatch):
+    """The UI shows a progress bar during long backfills; the service reports
+    (done, total) after each day's stats."""
+    monkeypatch.setattr(garmin_client, "login", lambda: object())
+    monkeypatch.setattr(garmin_client, "fetch_recent_activities", lambda days, client=None: [])
+    monkeypatch.setattr(garmin_client, "fetch_daily_stats", lambda day, client=None: {"date": day})
+    monkeypatch.setattr(
+        garmin_raw_repo,
+        "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: len(records),
+    )
+    seen = []
+
+    result = sync_service.sync_garmin_range(days=5, on_progress=lambda d, t: seen.append((d, t)))
+
+    assert result["ok"] is True
+    assert seen == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]
+
+
+def test_device_status_reports_counts_and_last_sync(monkeypatch):
+    monkeypatch.setattr(garmin_raw_repo, "latest_ingested_at", lambda: "2026-06-01T06:30:00")
+    monkeypatch.setattr(garmin_raw_repo, "count", lambda: 1234)
+    monkeypatch.setattr(whoop_raw_repo, "latest_ingested_at", lambda: "2026-06-02T06:30:00")
+    monkeypatch.setattr(whoop_raw_repo, "count", lambda: 567)
+    monkeypatch.setattr(whoop_client, "is_connected", lambda: True)
+
+    status = sync_service.device_status()
+
+    assert status["garmin"] == {"last_sync": "2026-06-01T06:30:00", "rows": 1234}
+    assert status["whoop"] == {
+        "connected": True, "last_sync": "2026-06-02T06:30:00", "rows": 567,
+    }
+
+
+def test_device_status_survives_db_failure(monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    for repo in (garmin_raw_repo, whoop_raw_repo):
+        monkeypatch.setattr(repo, "latest_ingested_at", boom)
+        monkeypatch.setattr(repo, "count", boom)
+    monkeypatch.setattr(whoop_client, "is_connected", boom)
+
+    status = sync_service.device_status()  # must not raise into the UI
+
+    assert status["garmin"] == {"last_sync": None, "rows": None}
+    assert status["whoop"] == {"connected": False, "last_sync": None, "rows": None}
+
+
 def test_backfill_defaults_to_a_year(monkeypatch):
     captured = {}
 
-    def fake_garmin(days):
+    def fake_garmin(days, **kw):
         captured["garmin"] = days
         return {"ok": True}
 
-    def fake_whoop(days):
+    def fake_whoop(days, **kw):
         captured["whoop"] = days
         return {"ok": True}
 

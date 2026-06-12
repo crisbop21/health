@@ -106,6 +106,21 @@ def test_collect_paginates(monkeypatch):
     assert [r["id"] for r in result["records"]] == [1, 2, 3]
 
 
+def test_collect_follows_long_paginations(monkeypatch):
+    """A dense backfill window can run past 10 pages; the cap must be generous
+    enough that records are never silently dropped mid-window."""
+    monkeypatch.setattr(whoop_client, "_valid_access_token", lambda: "tok")
+    pages = iter(
+        {"records": [{"id": i}], "next_token": f"p{i + 1}" if i < 11 else None}
+        for i in range(12)
+    )
+    monkeypatch.setattr(whoop_client, "_request_get", lambda path, params, token: next(pages))
+
+    result = whoop_client._collect("/activity/sleep", "s", "e")
+
+    assert [r["id"] for r in result["records"]] == list(range(12))
+
+
 def test_expired_helpers():
     assert whoop_client._expired(None) is True
     assert whoop_client._expired("not-a-date") is True

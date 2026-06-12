@@ -125,13 +125,18 @@ def snapshot() -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def metrics_series(days: int = 365) -> list[dict]:
-    """daily_metrics rows over the last `days`, oldest first."""
-    start = (date.today() - timedelta(days=days)).isoformat()
-    return daily_metrics_repo.get_range(start, _today())
+def _window_start(days: int | None) -> str:
+    """ISO start date for a rolling window; None means all history (epoch)."""
+    if days is None:
+        return _EPOCH
+    return (date.today() - timedelta(days=days)).isoformat()
 
 
-def workouts_series(days: int = 365) -> list[dict]:
-    """workout rows over the last `days`, oldest first."""
-    start = (date.today() - timedelta(days=days)).isoformat()
-    return workouts_repo.get_range(start, _today())
+def metrics_series(days: int | None = 365) -> list[dict]:
+    """daily_metrics rows over the last `days` (None = everything), oldest first."""
+    return daily_metrics_repo.get_range(_window_start(days), _today())
+
+
+def workouts_series(days: int | None = 365) -> list[dict]:
+    """workout rows over the last `days` (None = everything), oldest first."""
+    return workouts_repo.get_range(_window_start(days), _today())

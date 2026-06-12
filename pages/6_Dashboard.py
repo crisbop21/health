@@ -43,7 +43,7 @@ def _workouts(days):
 
 
 # --- Controls -------------------------------------------------------------
-PERIODS = {"30d": 30, "90d": 90, "6mo": 180, "1yr": 365, "2yr": 730}
+PERIODS = {"30d": 30, "90d": 90, "6mo": 180, "1yr": 365, "2yr": 730, "All": None}
 ctrl_l, ctrl_r = st.columns([4, 1])
 with ctrl_l:
     period = st.segmented_control(
@@ -64,8 +64,9 @@ if not overview.get("ok"):
 m, w = overview["metrics"], overview["workouts"]
 if m["days"] == 0 and w["count"] == 0:
     st.info(
-        "No derived data yet. **Settings → Backfill last 365 days**, then "
-        "**Recompute metrics**, and your history will appear here."
+        "No derived data yet. Run a **Historical backfill** on the Settings "
+        "page (it recomputes metrics automatically) and your history will "
+        "appear here."
     )
     st.stop()
 
