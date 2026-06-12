@@ -4,10 +4,12 @@ from datetime import date, datetime, time
 import streamlit as st
 
 from clients import whoop_client
-from core import health, pace_zones, whoop_oauth
+from core import health, pace_zones, ui, whoop_oauth
 from core.auth import require_password
 from repositories import goals_repo
 from services import metrics_service, sync_service
+
+RACE_DISTANCES = {"5K": 5.0, "10K": 10.0, "Half marathon": 21.0975, "Marathon": 42.195}
 
 
 def _secs_to_hms(seconds) -> tuple[int, int, int]:
@@ -28,6 +30,7 @@ whoop_oauth.handle_callback()
 require_password()
 
 st.title("Settings")
+ui.race_header()
 
 if not health.db_available():
     st.error(
@@ -54,6 +57,16 @@ with st.form("goal_editor"):
         race_default = date(2026, 12, 6)
     race_date = st.date_input("Race date", value=race_default)
 
+    current_km = goal.get("race_distance_km") or 42.195
+    distance_default = next(
+        (i for i, km in enumerate(RACE_DISTANCES.values()) if abs(km - current_km) < 0.3),
+        len(RACE_DISTANCES) - 1,
+    )
+    race_distance = st.selectbox(
+        "Race distance", list(RACE_DISTANCES), index=distance_default,
+        help="Used to compare your projected race time against the goal.",
+    )
+
     st.markdown("Goal finish time")
     t1, t2, t3 = st.columns(3)
     hours = t1.number_input("h", min_value=0, max_value=99, value=int(g_h))
@@ -78,6 +91,7 @@ with st.form("goal_editor"):
             "sport": sport.strip() or "running",
             "race_date": race_date.isoformat(),
             "goal_time_seconds": int(hours) * 3600 + int(minutes) * 60 + int(seconds),
+            "race_distance_km": RACE_DISTANCES[race_distance],
             "days_per_week": int(days_per_week),
             "max_session_minutes": int(max_session),
             "time_windows": {"default": [win_start.strftime("%H:%M"), win_end.strftime("%H:%M")]},

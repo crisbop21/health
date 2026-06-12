@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from core import clock, logger
-from repositories import daily_metrics_repo, workouts_repo
+from core import clock, logger, pace_zones
+from repositories import daily_metrics_repo, goals_repo, workouts_repo
 
 # Derived rows never predate device history; a fixed floor keeps the "all data"
 # range query simple without a dedicated min-date endpoint.
@@ -180,4 +180,48 @@ def training_load(days: int | None = 365) -> dict:
         return {"ok": True, "rows": out}
     except Exception as exc:
         logger.error("calc", "training_load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc)}
+
+
+def zone_distribution(days: int = 28) -> dict:
+    """Share of running km in each goal pace zone over the window — the
+    easy/hard split most self-coached runners get wrong (easy days run too
+    fast). Each run's average pace is assigned to the nearest zone from the
+    active goal's pace table. easy = recovery+easy zones; everything faster
+    counts as hard. Empty rows when there's no goal or no runs."""
+    try:
+        goal = goals_repo.get_active()
+        zones = pace_zones.pace_zones(
+            (goal or {}).get("goal_time_seconds"), (goal or {}).get("sport") or "running"
+        )
+        if not zones:
+            return {"ok": True, "rows": [], "easy_pct": None, "total_km": 0.0}
+
+        workouts = workouts_repo.get_range(_window_start(days), _today())
+        km_by_zone = {z: 0.0 for z in zones}
+        for w in workouts:
+            sport = (w.get("sport") or "").lower()
+            d, t = w.get("distance_km"), w.get("duration_seconds")
+            if "run" not in sport or not d or not t:
+                continue
+            pace = t / d
+            zone = min(zones, key=lambda z: abs(zones[z] - pace))
+            km_by_zone[zone] += d
+
+        total = sum(km_by_zone.values())
+        rows = [
+            {"zone": z, "pace": pace_zones.format_pace(p), "km": round(km_by_zone[z], 1),
+             "pct": int(round(100 * km_by_zone[z] / total)) if total else 0}
+            for z, p in zones.items()
+        ]
+        easy_km = km_by_zone.get("recovery", 0.0) + km_by_zone.get("easy", 0.0)
+        return {
+            "ok": True,
+            "rows": rows,
+            "easy_pct": int(round(100 * easy_km / total)) if total else None,
+            "total_km": round(total, 1),
+            "window_days": days,
+        }
+    except Exception as exc:
+        logger.error("calc", "zone_distribution failed", {"error": str(exc)})
         return {"ok": False, "error": str(exc)}

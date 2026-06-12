@@ -44,3 +44,12 @@ def format_pace(sec_per_km: float | None) -> str | None:
 
 def pace_zones_formatted(goal_time_seconds: int | None, sport: str = "running") -> dict[str, str]:
     return {zone: format_pace(p) for zone, p in pace_zones(goal_time_seconds, sport).items()}
+
+
+def format_duration(seconds: float | None) -> str | None:
+    """A race/run time as H:MM:SS (or M:SS under an hour)."""
+    if seconds is None:
+        return None
+    s = int(round(seconds))
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
