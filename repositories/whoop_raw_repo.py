@@ -6,7 +6,7 @@ of their own, so they key on `cycle_id`."""
 
 from __future__ import annotations
 
-from core.supabase_client import fetch_all, get_client
+from core.supabase_client import fetch_all, get_client, last_write_wins
 
 # Keep bulk upserts comfortably sized; a long backfill window can return
 # hundreds of records per endpoint.
@@ -38,6 +38,7 @@ def upsert_records(records: list, endpoint: str, recorded_at: str | None = None)
             }
         )
     written = 0
+    rows = last_write_wins(rows, key=lambda r: r["external_id"])
     for i in range(0, len(rows), _UPSERT_CHUNK):
         resp = (
             get_client()

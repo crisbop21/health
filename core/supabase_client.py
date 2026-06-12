@@ -28,6 +28,16 @@ def fetch_all(make_query: Callable, page_size: int = PAGE_SIZE) -> list[dict]:
         offset += page_size
 
 
+def last_write_wins(rows: list[dict], key: Callable) -> list[dict]:
+    """Collapse rows sharing a conflict key within one write batch (later rows
+    win). Postgres rejects an upsert whose batch touches the same row twice
+    (error 21000), so every repo dedupes before writing."""
+    out: dict = {}
+    for row in rows:
+        out[key(row)] = row
+    return list(out.values())
+
+
 @lru_cache(maxsize=1)
 def get_client():
     # Import lazily so repositories can be imported without supabase installed

@@ -5,13 +5,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.supabase_client import fetch_all, get_client
+from core.supabase_client import fetch_all, get_client, last_write_wins
 
 _UPSERT_CHUNK = 500
 
 
 def upsert_many(rows: list[dict[str, Any]]) -> int:
     written = 0
+    rows = last_write_wins(rows, key=lambda r: r.get("date"))
     for i in range(0, len(rows), _UPSERT_CHUNK):
         resp = (
             get_client()
