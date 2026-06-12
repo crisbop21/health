@@ -6,7 +6,7 @@ import streamlit as st
 from clients import whoop_client
 from core import health, pace_zones, whoop_oauth
 from core.auth import require_password
-from repositories import garmin_raw_repo, goals_repo, whoop_raw_repo
+from repositories import goals_repo
 from services import metrics_service, sync_service
 
 
@@ -97,13 +97,6 @@ if goal.get("goal_time_seconds") and (goal.get("sport") or "running") == "runnin
 st.subheader("Devices")
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _garmin_msg(g: dict) -> str:
     if not g.get("ok"):
         return f"Garmin: {g.get('error')}"
@@ -114,67 +107,93 @@ def _garmin_msg(g: dict) -> str:
     return msg
 
 
-col_g, col_w = st.columns(2)
-with col_g:
-    st.markdown("**Garmin**")
-    last = _safe(garmin_raw_repo.latest_ingested_at)
-    st.caption(f"Last sync: {last or 'never'}")
-with col_w:
-    st.markdown("**Whoop**")
-    connected = _safe(whoop_client.is_connected, False)
-    last_w = _safe(whoop_raw_repo.latest_ingested_at)
-    st.caption(f"{'Connected' if connected else 'Not connected'} · last sync: {last_w or 'never'}")
-    if not connected:
-        state = st.session_state.setdefault("whoop_oauth_state", secrets.token_urlsafe(16))
-        st.link_button("Connect Whoop", whoop_client.authorize_url(state))
+def _fmt_ts(ts: str | None) -> str:
+    return ts[:16].replace("T", " ") if ts else "never"
 
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("Sync all devices"):
-        with st.spinner("Syncing Garmin and Whoop…"):
-            result = sync_service.sync_all_devices()
-        g, w = result["garmin"], result["whoop"]
-        (st.success if g.get("ok") else st.error)(_garmin_msg(g))
-        (st.success if w.get("ok") else st.error)(
-            f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
-        )
-with c2:
-    if st.button("Recompute metrics"):
-        with st.spinner("Rebuilding daily metrics from raw data…"):
-            result = metrics_service.recompute_daily_metrics()
-        if result.get("ok"):
-            st.success(
-                f"Recomputed {result['daily_metrics']} days, {result['workouts']} workouts."
-            )
-        else:
-            st.error(f"Recompute failed: {result.get('error')}. See the Debug tab.")
 
-st.markdown("**Historical backfill**")
-st.caption(
-    "Pull a longer history from Garmin and Whoop in one shot. This loops the "
-    "per-day Garmin endpoints, so a year takes a few minutes. Garmin rate-limits "
-    "bursts — if older days come back empty, re-run (it's idempotent), or set "
-    "`GARMIN_PACING_SECONDS` to 1-2. Run **Recompute metrics** afterwards."
-)
-b1, b2 = st.columns([1, 2])
-backfill_days = b1.number_input(
-    "Days back", min_value=7, max_value=730, value=365, step=1
-)
-if b2.button(f"Backfill last {int(backfill_days)} days", type="primary"):
-    with st.spinner(f"Backfilling {int(backfill_days)} days from Garmin and Whoop…"):
-        result = sync_service.backfill_all_devices(days=int(backfill_days))
+def _fmt_rows(rows) -> str:
+    return f"{rows:,} raw records" if rows is not None else "row count unavailable"
+
+
+def _show_sync_outcome(result: dict) -> None:
     g, w = result["garmin"], result["whoop"]
     (st.success if g.get("ok") else st.error)(_garmin_msg(g))
     (st.success if w.get("ok") else st.error)(
         f"Whoop: {w.get('rows_written', 0)} rows" if w.get("ok") else f"Whoop: {w.get('error')}"
     )
+
+
+def _recompute_and_show() -> None:
+    with st.spinner("Rebuilding daily metrics and workouts from raw data…"):
+        result = metrics_service.recompute_daily_metrics()
     if result.get("ok"):
-        with st.spinner("Rebuilding daily metrics from the backfilled data…"):
-            recompute = metrics_service.recompute_daily_metrics()
-        if recompute.get("ok"):
-            st.success(
-                f"Recomputed {recompute['daily_metrics']} days, "
-                f"{recompute['workouts']} workouts."
-            )
-        else:
-            st.error(f"Recompute failed: {recompute.get('error')}. See the Debug tab.")
+        st.success(f"Recomputed {result['daily_metrics']} days, {result['workouts']} workouts.")
+    else:
+        st.error(f"Recompute failed: {result.get('error')}. See the Debug tab.")
+
+
+status = sync_service.device_status()
+col_g, col_w = st.columns(2)
+with col_g:
+    g_status = status["garmin"]
+    st.markdown("**Garmin**")
+    st.caption(f"Last sync: {_fmt_ts(g_status['last_sync'])} · {_fmt_rows(g_status['rows'])}")
+with col_w:
+    w_status = status["whoop"]
+    st.markdown("**Whoop**")
+    st.caption(
+        f"{'Connected' if w_status['connected'] else 'Not connected'} · "
+        f"last sync: {_fmt_ts(w_status['last_sync'])} · {_fmt_rows(w_status['rows'])}"
+    )
+    if not w_status["connected"]:
+        state = st.session_state.setdefault("whoop_oauth_state", secrets.token_urlsafe(16))
+        st.link_button("Connect Whoop", whoop_client.authorize_url(state))
+
+c1, c2 = st.columns(2)
+with c1:
+    if st.button(
+        "Sync last 7 days",
+        type="primary",
+        help="Pull the last week from both devices, then rebuild the derived metrics.",
+    ):
+        with st.spinner("Syncing Garmin and Whoop…"):
+            result = sync_service.sync_all_devices()
+        _show_sync_outcome(result)
+        _recompute_and_show()
+with c2:
+    if st.button(
+        "Recompute metrics",
+        help="Rebuild daily metrics and workouts by replaying the stored raw data. "
+        "No device calls — safe to run any time.",
+    ):
+        _recompute_and_show()
+
+st.markdown("**Historical backfill**")
+st.caption(
+    "Pull your full device history in one shot. Garmin's daily stats are per-day "
+    "endpoints (~4 requests per day of history), so long ranges take a while — "
+    "the bar tracks that loop. Garmin rate-limits bursts: skipped days are "
+    "reported, and re-running fills them (backfill is idempotent). If many days "
+    "skip, set `GARMIN_PACING_SECONDS` to 1-2. Metrics recompute automatically "
+    "when the pull finishes."
+)
+BACKFILL_PRESETS = {
+    "3 months": 90,
+    "1 year": 365,
+    "2 years": 730,
+    "5 years": 1825,
+    "Everything (10 years)": 3650,
+}
+span = st.radio("How far back?", list(BACKFILL_PRESETS), index=1, horizontal=True)
+if st.button(f"Backfill {span.lower()}", type="primary"):
+    days_back = BACKFILL_PRESETS[span]
+    bar = st.progress(0.0, text="Starting backfill — fetching Garmin activities…")
+
+    def _on_progress(done: int, total: int) -> None:
+        bar.progress(done / total, text=f"Garmin daily stats: day {done} of {total}")
+
+    result = sync_service.backfill_all_devices(days=days_back, on_progress=_on_progress)
+    bar.empty()
+    _show_sync_outcome(result)
+    # Recompute even after a partial failure so whatever did land is visible.
+    _recompute_and_show()

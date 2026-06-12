@@ -114,3 +114,25 @@ def test_series_use_window(monkeypatch):
     # Both start dates are 30 days back, not the epoch floor used by overview.
     assert captured["metrics_start"] > "2000-01-01"
     assert captured["workouts_start"] > "2000-01-01"
+
+
+def test_series_all_history(monkeypatch):
+    """days=None means everything: the dashboard's "All" period queries from
+    the epoch floor instead of a rolling window."""
+    captured = {}
+
+    def fake_metrics(s, e):
+        captured["metrics_start"] = s
+        return METRICS
+
+    def fake_workouts(s, e):
+        captured["workouts_start"] = s
+        return WORKOUTS
+
+    monkeypatch.setattr(daily_metrics_repo, "get_range", fake_metrics)
+    monkeypatch.setattr(workouts_repo, "get_range", fake_workouts)
+
+    assert dashboard_service.metrics_series(days=None) == METRICS
+    assert dashboard_service.workouts_series(days=None) == WORKOUTS
+    assert captured["metrics_start"] == "2000-01-01"
+    assert captured["workouts_start"] == "2000-01-01"

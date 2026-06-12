@@ -5,27 +5,35 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.supabase_client import get_client
+from core.supabase_client import fetch_all, get_client
+
+_UPSERT_CHUNK = 500
 
 
 def upsert_many(rows: list[dict[str, Any]]) -> int:
-    if not rows:
-        return 0
-    resp = get_client().table("daily_metrics").upsert(rows, on_conflict="date").execute()
-    return len(resp.data or [])
+    written = 0
+    for i in range(0, len(rows), _UPSERT_CHUNK):
+        resp = (
+            get_client()
+            .table("daily_metrics")
+            .upsert(rows[i : i + _UPSERT_CHUNK], on_conflict="date")
+            .execute()
+        )
+        written += len(resp.data or [])
+    return written
 
 
 def get_range(start: str, end: str) -> list[dict]:
-    resp = (
-        get_client()
+    """All rows in [start, end], oldest first, paging past the per-response
+    row cap so multi-year histories aren't truncated."""
+    return fetch_all(
+        lambda: get_client()
         .table("daily_metrics")
         .select("*")
         .gte("date", start)
         .lte("date", end)
         .order("date")
-        .execute()
     )
-    return resp.data or []
 
 
 def get_recent(days: int = 14) -> list[dict]:

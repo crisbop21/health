@@ -22,7 +22,16 @@ require_password()
 st.title("Health & Training Assistant")
 st.caption("Personal training plan, grounded in your Garmin and Whoop data.")
 
-st.write(
-    "Use the sidebar to navigate: **Today**, **Plan**, **Ask**, **Dashboard**, "
-    "**Settings**, and **Debug**."
-)
+PAGES = [
+    ("pages/1_Today.py", "Today", "📅", "Today's workout, last night's recovery, and this week's tests."),
+    ("pages/2_Plan.py", "Plan", "🗓️", "Your training plan and revisions."),
+    ("pages/3_Ask.py", "Ask", "💬", "Ask questions grounded in your data."),
+    ("pages/6_Dashboard.py", "Dashboard", "📈", "Trends, training volume, and data coverage."),
+    ("pages/4_Settings.py", "Settings", "⚙️", "Goal, device sync, and historical backfill."),
+    ("pages/5_Debug.py", "Debug", "🔧", "In-app logs for troubleshooting."),
+]
+left, right = st.columns(2)
+for i, (path, label, icon, blurb) in enumerate(PAGES):
+    with left if i % 2 == 0 else right:
+        st.page_link(path, label=f"**{label}**", icon=icon)
+        st.caption(blurb)
