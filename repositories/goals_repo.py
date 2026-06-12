@@ -31,6 +31,7 @@ def create(goal: dict) -> dict:
         "sport": goal.get("sport", "running"),
         "race_date": goal.get("race_date"),
         "goal_time_seconds": goal.get("goal_time_seconds"),
+        "race_distance_km": goal.get("race_distance_km"),
         "days_per_week": goal.get("days_per_week"),
         "max_session_minutes": goal.get("max_session_minutes"),
         "time_windows": goal.get("time_windows") or {},

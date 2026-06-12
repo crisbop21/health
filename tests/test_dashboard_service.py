@@ -184,3 +184,44 @@ def test_training_load_failure(monkeypatch):
     result = dashboard_service.training_load()
     assert result["ok"] is False
     assert "db down" in result["error"]
+
+
+def test_zone_distribution_easy_hard_split(monkeypatch):
+    from repositories import goals_repo
+
+    # 3:45 marathon goal -> marathon pace 5:20/km; easy 6:08, threshold 4:54.
+    monkeypatch.setattr(
+        goals_repo, "get_active",
+        lambda: {"sport": "running", "goal_time_seconds": 13500},
+    )
+    runs = [
+        {"date": "2026-06-01", "sport": "running", "distance_km": 10.0,
+         "duration_seconds": 3700},  # 6:10/km -> easy
+        {"date": "2026-06-03", "sport": "running", "distance_km": 8.0,
+         "duration_seconds": 3240},  # 6:45/km -> recovery
+        {"date": "2026-06-05", "sport": "running", "distance_km": 6.0,
+         "duration_seconds": 1770},  # 4:55/km -> threshold
+        {"date": "2026-06-05", "sport": "cycling", "distance_km": 40.0,
+         "duration_seconds": 5000},  # not a run -> ignored
+    ]
+    monkeypatch.setattr(workouts_repo, "get_range", lambda s, e: runs)
+
+    result = dashboard_service.zone_distribution(days=28)
+
+    assert result["ok"] is True
+    by_zone = {r["zone"]: r["km"] for r in result["rows"]}
+    assert by_zone["easy"] == 10.0
+    assert by_zone["recovery"] == 8.0
+    assert by_zone["threshold"] == 6.0
+    assert result["easy_pct"] == 75  # (10 + 8) / 24
+    assert result["total_km"] == 24.0
+
+
+def test_zone_distribution_without_goal(monkeypatch):
+    from repositories import goals_repo
+
+    monkeypatch.setattr(goals_repo, "get_active", lambda: None)
+    result = dashboard_service.zone_distribution()
+    assert result["ok"] is True
+    assert result["rows"] == []
+    assert result["easy_pct"] is None

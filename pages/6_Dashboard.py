@@ -6,9 +6,9 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core import health
+from core import health, pace_zones, ui
 from core.auth import require_password
-from services import dashboard_service
+from services import benchmark_service, dashboard_service, goal_service
 from services.dashboard_service import METRIC_META
 
 st.set_page_config(page_title="Dashboard · Health & Training", layout="wide")
@@ -49,6 +49,7 @@ st.markdown(
 )
 
 st.title("Data & History")
+ui.race_header()
 st.caption("Your latest readings, how they're trending, and training volume.")
 
 if not health.db_available():
@@ -80,6 +81,26 @@ def _workouts(days):
 @st.cache_data(ttl=300, show_spinner=False)
 def _training_load(days):
     return dashboard_service.training_load(days=days)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _projections():
+    return benchmark_service.race_projections()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _projection_history(target_km):
+    return benchmark_service.projection_history(target_km)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _personal_records():
+    return benchmark_service.personal_records()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _zones(days):
+    return dashboard_service.zone_distribution(days=days)
 
 
 # --- Controls -------------------------------------------------------------
@@ -225,7 +246,76 @@ def _trend_chart(col: str, title: str, color: str, bands=None, rule=None):
 
 
 st.subheader("Trends")
-tab_rec, tab_sleep, tab_train = st.tabs(["Recovery & HRV", "Sleep", "Training load"])
+tab_race, tab_rec, tab_sleep, tab_train = st.tabs(
+    ["Race readiness", "Recovery & HRV", "Sleep", "Training load"]
+)
+
+with tab_race:
+    proj = _projections()
+    prows = [p for p in proj.get("projections", []) if p.get("projected_seconds")] if proj.get("ok") else []
+    if prows:
+        cols = st.columns(len(prows))
+        for col, p in zip(cols, prows):
+            delta = None
+            if p.get("delta_seconds") is not None:
+                sign = "+" if p["delta_seconds"] >= 0 else "-"
+                delta = f"{sign}{pace_zones.format_duration(abs(p['delta_seconds']))} vs goal"
+            col.metric(p["label"], p["projected"], delta=delta, delta_color="inverse")
+            src = p.get("source") or {}
+            col.caption(
+                f"{p['confidence']} confidence · from {src.get('distance_km', '?')} km "
+                f"on {src.get('date', '?')}"
+            )
+        st.caption(
+            f"Riegel projections from your best efforts in the last "
+            f"{proj.get('window_days')} days ({proj.get('runs_considered')} qualifying runs)."
+        )
+    else:
+        st.caption("Projections appear once you have synced runs of 5 km or more.")
+
+    summary = goal_service.race_summary()
+    target_km = summary.get("race_distance_km") or 42.195
+    hist = _projection_history(target_km)
+    hrows = hist.get("rows", []) if hist.get("ok") else []
+    if len(hrows) >= 2:
+        st.markdown(f"**Fitness curve — projected {summary.get('distance_label') or 'race'} time**")
+        hdf = pd.DataFrame(hrows)
+        hdf["date"] = pd.to_datetime(hdf["date"])
+        hdf["hours"] = hdf["projected_seconds"] / 3600
+        layers = [
+            alt.Chart(hdf).mark_line(color="#1565c0", strokeWidth=2.5, point=True)
+            .encode(
+                x=alt.X("date:T", title=None),
+                y=alt.Y("hours:Q", title="projected time (h)", scale=alt.Scale(zero=False)),
+                tooltip=[alt.Tooltip("date:T"), alt.Tooltip("hours:Q", format=".2f", title="hours")],
+            )
+        ]
+        if summary.get("goal_time_seconds"):
+            layers.append(
+                alt.Chart(pd.DataFrame({"y": [summary["goal_time_seconds"] / 3600]}))
+                .mark_rule(strokeDash=[4, 4], color="green")
+                .encode(y="y:Q")
+            )
+        st.altair_chart(alt.layer(*layers).properties(height=220), use_container_width=True)
+        st.caption("Weekly checkpoints; lower is fitter. Dashed line = your goal time.")
+
+    prs = _personal_records()
+    if prs.get("ok") and prs.get("total_runs"):
+        st.markdown("**Personal records** (pace-equivalent from your synced history)")
+        recs = prs["records"]
+        cols = st.columns(len(recs))
+        for col, (label, rec) in zip(cols, recs.items()):
+            col.metric(label, rec["formatted"] if rec else "—")
+            if rec:
+                col.caption(f"{rec['date']} · from {rec['from_km']:g} km")
+        bits = []
+        if prs.get("longest_run"):
+            lr = prs["longest_run"]
+            bits.append(f"longest run **{lr['distance_km']:g} km** ({lr['date']})")
+        if prs.get("biggest_week_km"):
+            bits.append(f"biggest week **{prs['biggest_week_km']:g} km**")
+        bits.append(f"lifetime **{prs['total_km']:g} km** over {prs['total_runs']} runs")
+        st.caption(" · ".join(bits))
 
 with tab_rec:
     # Equal columns so the metric that has data isn't buried beneath a giant
@@ -279,6 +369,37 @@ with tab_train:
         )
     elif load.get("ok"):
         st.caption("Not enough workout data for a load ratio yet.")
+
+    zones = _zones(28)
+    zrows = [r for r in zones.get("rows", []) if r["km"] > 0] if zones.get("ok") else []
+    if zrows:
+        st.markdown("**Pace-zone mix — last 28 days**")
+        zdf = pd.DataFrame(zrows)
+        zchart = (
+            alt.Chart(zdf)
+            .mark_bar(cornerRadiusEnd=4)
+            .encode(
+                x=alt.X("km:Q", title="km"),
+                y=alt.Y("zone:N", title=None,
+                        sort=["recovery", "easy", "marathon", "threshold", "interval"]),
+                color=alt.Color(
+                    "zone:N", legend=None,
+                    scale=alt.Scale(
+                        domain=["recovery", "easy", "marathon", "threshold", "interval"],
+                        range=["#90caf9", "#66bb6a", "#ffb300", "#f4511e", "#b71c1c"]),
+                ),
+                tooltip=["zone:N", "pace:N", alt.Tooltip("km:Q", format=".1f"), "pct:Q"],
+            )
+            .properties(height=170)
+        )
+        st.altair_chart(zchart, use_container_width=True)
+        easy = zones.get("easy_pct")
+        if easy is not None:
+            verdict = "on target" if easy >= 75 else "running easy days too hard"
+            st.caption(
+                f"Easy share (recovery + easy): **{easy}%** — {verdict}. "
+                "Most plans aim for ~80% easy / 20% hard."
+            )
 
 
 # --- Training volume ------------------------------------------------------

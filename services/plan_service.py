@@ -4,6 +4,7 @@ audit revision. Pure Python — no Streamlit."""
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 
 from clients import claude_client
 from core import clock, guardrails, logger, pace_zones
@@ -12,6 +13,7 @@ from repositories import (
     goals_repo,
     plan_revisions_repo,
     training_plan_repo,
+    workouts_repo,
 )
 
 
@@ -132,3 +134,69 @@ def current_plan() -> dict:
     except Exception as exc:
         logger.warning("db", "plan load failed", {"error": str(exc)})
         return {"ok": False, "error": str(exc), "rows": []}
+
+
+def adherence(weeks: int = 8) -> dict:
+    """Planned vs actual over the last `weeks`: weekly km comparison, training
+    days hit, and which plan dates have a matching workout. Future plan days
+    are excluded — adherence only judges days that have already happened."""
+    try:
+        today = clock.local_today()
+        start = today - timedelta(days=weeks * 7)
+        plan = training_plan_repo.get_plan()
+        workouts = workouts_repo.get_range(start.isoformat(), today.isoformat())
+    except Exception as exc:
+        logger.error("calc", "adherence failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc)}
+
+    def _week_of(iso: str) -> str:
+        d = date.fromisoformat(iso)
+        return (d - timedelta(days=d.weekday())).isoformat()
+
+    today_iso = today.isoformat()
+    past_plan = [
+        r for r in plan
+        if r.get("date") and start.isoformat() <= r["date"] <= today_iso
+    ]
+    workout_dates = {w["date"] for w in workouts if w.get("date")}
+
+    weekly: dict[str, dict] = {}
+    for r in past_plan:
+        wk = weekly.setdefault(
+            _week_of(r["date"]),
+            {"planned_km": 0.0, "actual_km": 0.0, "planned_days": 0, "active_days": set()},
+        )
+        wk["planned_km"] += float(r.get("planned_distance_km") or 0)
+        if r.get("planned_distance_km") or r.get("planned_duration_minutes"):
+            wk["planned_days"] += 1
+    for w in workouts:
+        d = w.get("date")
+        if not d:
+            continue
+        wk = weekly.setdefault(
+            _week_of(d),
+            {"planned_km": 0.0, "actual_km": 0.0, "planned_days": 0, "active_days": set()},
+        )
+        wk["actual_km"] += float(w.get("distance_km") or 0)
+        wk["active_days"].add(d)
+
+    rows = [
+        {
+            "week": week,
+            "planned_km": round(v["planned_km"], 1),
+            "actual_km": round(v["actual_km"], 1),
+            "planned_days": v["planned_days"],
+            "active_days": len(v["active_days"]),
+        }
+        for week, v in sorted(weekly.items())
+    ]
+    planned_km = round(sum(r["planned_km"] for r in rows), 1)
+    actual_km = round(sum(r["actual_km"] for r in rows), 1)
+    return {
+        "ok": True,
+        "weeks": rows,
+        "planned_km": planned_km,
+        "actual_km": actual_km,
+        "adherence_pct": int(round(100 * actual_km / planned_km)) if planned_km else None,
+        "completed_dates": sorted(workout_dates),
+    }

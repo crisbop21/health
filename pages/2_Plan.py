@@ -1,15 +1,18 @@
 from datetime import datetime, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core import clock
+from core import clock, ui
 from core.auth import require_password
 from services import plan_service, test_service
 
+st.set_page_config(page_title="Plan · Health & Training", layout="wide")
 require_password()
 
 st.title("Plan")
+ui.race_header()
 
 c1, c2 = st.columns(2)
 with c1:
@@ -66,10 +69,17 @@ view = df if choice == "All weeks" else df[df["_week"] == choice.replace("Week o
 
 st.caption(f"Plan version {version} — {len(view)} of {len(df)} days. Today is highlighted.")
 
+# Close the loop: mark plan days that have a matching synced workout.
+adherence = plan_service.adherence(weeks=8)
+completed = set(adherence.get("completed_dates") or []) if adherence.get("ok") else set()
+view = view.copy()
+view["done"] = view["date"].map(lambda d: "✓" if d in completed else "")
+
 display_cols = [
     c
     for c in [
         "date",
+        "done",
         "planned_sport",
         "planned_workout_type",
         "planned_distance_km",
@@ -93,6 +103,40 @@ st.dataframe(
     width="stretch",
     hide_index=True,
 )
+
+st.subheader("Adherence")
+if adherence.get("ok") and adherence.get("weeks"):
+    adf = pd.DataFrame(adherence["weeks"])
+    melted = adf.melt(
+        id_vars="week", value_vars=["planned_km", "actual_km"],
+        var_name="kind", value_name="km",
+    )
+    melted["kind"] = melted["kind"].map({"planned_km": "planned", "actual_km": "done"})
+    chart = (
+        alt.Chart(melted)
+        .mark_bar()
+        .encode(
+            x=alt.X("week:N", title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset="kind:N",
+            y=alt.Y("km:Q", title="km / week"),
+            color=alt.Color(
+                "kind:N",
+                scale=alt.Scale(domain=["planned", "done"], range=["#b0bec5", "#00897b"]),
+                legend=alt.Legend(orient="top", title=None),
+            ),
+            tooltip=["week:N", "kind:N", alt.Tooltip("km:Q", format=".1f")],
+        )
+        .properties(height=220)
+    )
+    st.altair_chart(chart, use_container_width=True)
+    pct = adherence.get("adherence_pct")
+    st.caption(
+        f"Last 8 weeks: **{adherence['actual_km']} of {adherence['planned_km']} planned km"
+        + (f" ({pct}%)**." if pct is not None else "**.")
+        + " Future plan days don't count against you."
+    )
+else:
+    st.caption("Adherence appears once the plan overlaps your synced workouts.")
 
 st.subheader("Progress tests")
 if st.button("Schedule progress tests"):

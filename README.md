@@ -35,7 +35,7 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
 3. Create a Supabase project (free tier) and run the migrations in
    `migrations/` (`001_initial_schema.sql`, `002_oauth_tokens.sql`,
    `003_rls_policies.sql`, `004_raw_idempotent.sql`,
-   `005_workouts_natural_key.sql`) in order in the Supabase
+   `005_workouts_natural_key.sql`, `006_goal_race_distance.sql`) in order in the Supabase
    SQL editor. `001` creates the tables; `003` adds the row-level-security
    policies the API key needs to read and write (without it, syncs fail with
    "new row violates row-level security policy"); `004` adds the external_id
@@ -43,7 +43,8 @@ Streamlit UI (pages/)  ->  services/  ->  clients/      (Garmin, Whoop, Claude)
    tables, so re-run Backfill afterwards); `005` gives derived workouts a
    stable (source, external_id) identity so recompute upserts instead of
    delete-and-reinsert (it clears `workouts`, so run Recompute metrics
-   afterwards). Alternatively, use the project's
+   afterwards); `006` adds the goal's race distance (defaults existing goals
+   to the marathon). Alternatively, use the project's
    `service_role` key as `SUPABASE_KEY`, which bypasses RLS.
 4. Register a Whoop developer app at developer.whoop.com; set the redirect URI
    to match your local (`http://localhost:8501`) and deployed URLs.
