@@ -1,15 +1,15 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
+from core import clock
 from core.auth import require_password
-from repositories import debug_log_repo, progress_tests_repo
-from services import qa_service
+from services import log_service, qa_service, test_service
 
 require_password()
 
 st.title("Today")
-today = date.today().isoformat()
+today = clock.local_today().isoformat()
 
 # Status line is cached per day in the session and refreshed once on first load.
 cache_key = f"today_status_{today}"
@@ -57,10 +57,8 @@ with col2:
         st.caption("No recent metrics. Sync your devices.")
 
 st.subheader("This week's tests")
-try:
-    tests = progress_tests_repo.upcoming(today, (date.today() + timedelta(days=7)).isoformat())
-except Exception:
-    tests = []
+week_end = (clock.local_today() + timedelta(days=7)).isoformat()
+tests = test_service.upcoming_tests(today, week_end).get("rows", [])
 if tests:
     for t in tests:
         flag = "done" if t.get("completed") else "scheduled"
@@ -68,10 +66,7 @@ if tests:
 else:
     st.caption("No progress tests scheduled this week.")
 
-try:
-    errors = debug_log_repo.recent(limit=3, severity="error")
-except Exception:
-    errors = []
+errors = log_service.recent_logs(limit=3, severity="error").get("rows", [])
 if errors:
     with st.expander(f"Recent errors ({len(errors)})", expanded=False):
         for e in errors:

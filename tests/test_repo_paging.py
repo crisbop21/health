@@ -18,7 +18,8 @@ class FakeResponse:
 
 class FakeTable:
     """Chainable query builder that slices the client's rows like PostgREST:
-    at most PAGE_CAP rows per response, honoring .range()."""
+    at most PAGE_CAP rows per response, honoring .range(). Filter calls are
+    recorded on the client for assertions."""
 
     def __init__(self, client):
         self._client = client
@@ -33,12 +34,24 @@ class FakeTable:
         return self
 
     def eq(self, *args):
+        self._client.filters.append(("eq",) + args)
         return self
 
     def gte(self, *args):
+        self._client.filters.append(("gte",) + args)
         return self
 
     def lte(self, *args):
+        self._client.filters.append(("lte",) + args)
+        return self
+
+    def in_(self, *args):
+        self._client.filters.append(("in",) + args)
+        return self
+
+    def delete(self):
+        self._client.deletes += 1
+        self._write_rows = []
         return self
 
     def order(self, *args, **kwargs):
@@ -78,6 +91,8 @@ class FakeClient:
     def __init__(self, rows):
         self.rows = rows
         self.upsert_sizes = []
+        self.filters = []
+        self.deletes = 0
 
     def table(self, name):
         return FakeTable(self)
@@ -159,3 +174,67 @@ def test_raw_repo_counts(monkeypatch):
 
     assert garmin_raw_repo.count() == 42
     assert whoop_raw_repo.count() == 7
+
+
+# --- Incremental reads (recorded_at watermark) ------------------------------
+
+def test_raw_reads_filter_by_since(monkeypatch):
+    g = _patch(monkeypatch, garmin_raw_repo, [{"payload": {}}])
+    w = _patch(monkeypatch, whoop_raw_repo, [{"payload": {}}])
+
+    garmin_raw_repo.payloads("daily_stats", since="2026-06-01T00:00:00Z")
+    whoop_raw_repo.records("sleep", since="2026-06-01T00:00:00Z")
+
+    assert ("gte", "recorded_at", "2026-06-01T00:00:00Z") in g.filters
+    assert ("gte", "recorded_at", "2026-06-01T00:00:00Z") in w.filters
+
+
+def test_raw_reads_unfiltered_without_since(monkeypatch):
+    g = _patch(monkeypatch, garmin_raw_repo, [{"payload": {}}])
+    garmin_raw_repo.payloads("daily_stats")
+    assert not any(f[0] == "gte" for f in g.filters)
+
+
+def test_garmin_existing_ids(monkeypatch):
+    rows = [{"external_id": "2026-01-01"}, {"external_id": "2026-01-02"}, {"external_id": None}]
+    _patch(monkeypatch, garmin_raw_repo, rows)
+
+    assert garmin_raw_repo.existing_ids("daily_stats") == {"2026-01-01", "2026-01-02"}
+
+
+# --- Workouts natural-key helpers -------------------------------------------
+
+def test_workouts_upsert_chunks(monkeypatch):
+    client = _patch(monkeypatch, workouts_repo, [])
+    rows = [{"source": "garmin", "external_id": str(i)} for i in range(700)]
+
+    written = workouts_repo.upsert_many(rows)
+
+    assert written == 700
+    assert client.upsert_sizes == [500, 200]
+
+
+def test_workouts_dates_with_source(monkeypatch):
+    client = _patch(monkeypatch, workouts_repo, [{"date": "2026-05-25"}, {"date": "2026-05-25"}])
+
+    found = workouts_repo.dates_with_source("garmin", ["2026-05-25", "2026-05-26"])
+
+    assert found == {"2026-05-25"}
+    assert ("eq", "source", "garmin") in client.filters
+    assert ("in", "date", ["2026-05-25", "2026-05-26"]) in client.filters
+
+
+def test_workouts_dates_with_source_empty_dates_skips_query(monkeypatch):
+    client = _patch(monkeypatch, workouts_repo, [{"date": "x"}])
+    assert workouts_repo.dates_with_source("garmin", []) == set()
+    assert client.filters == []
+
+
+def test_workouts_delete_source_dates(monkeypatch):
+    client = _patch(monkeypatch, workouts_repo, [])
+
+    workouts_repo.delete_source_dates("whoop", ["2026-05-26"])
+
+    assert client.deletes == 1
+    assert ("eq", "source", "whoop") in client.filters
+    assert ("in", "date", ["2026-05-26"]) in client.filters

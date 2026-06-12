@@ -3,32 +3,36 @@ it to the raw tables, logging each step. Never raises into the UI — failures
 are logged and surfaced through the return value.
 
 The range functions accept an arbitrary number of days back so the same code
-path serves both the routine 7-day sync and a one-off year-long backfill. Raw
+path serves both the routine 7-day sync and a one-off multi-year backfill. Raw
 rows are stored verbatim and recompute is idempotent (daily_metrics upsert by
-date, workouts deleted-then-reinserted), so re-running a backfill is safe."""
+date, workouts upsert by source+external_id), so re-running a backfill is
+safe."""
 
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from clients import garmin_client, whoop_client
-from core import logger
+from core import clock, logger
 from core.config import settings
 from repositories import garmin_raw_repo, whoop_raw_repo
 
 
-def sync_garmin_range(days: int = 7, client=None, on_progress=None) -> dict:
+def sync_garmin_range(days: int = 7, client=None, on_progress=None, skip_existing=False) -> dict:
     """Sync `days` of Garmin activities and daily stats into garmin_raw,
     idempotently — re-syncing a day or activity overwrites instead of
     duplicating. Activities come in one date-range call; daily stats are per-day
     endpoints, so we loop day by day. A single bad day (e.g. a transient 429) is
     logged and skipped rather than aborting the whole range. `on_progress`
     (callable of (days_done, days_total)) lets the UI show a bar during long
-    backfills. Returns a summary dict; on failure, ok=False."""
+    backfills. With `skip_existing` (the backfill path), days whose stats are
+    already stored aren't re-fetched, so re-running a long backfill only fills
+    the gaps. Returns a summary dict; on failure, ok=False."""
     now = datetime.now(timezone.utc).isoformat()
     written = 0
     failed_days = 0
+    skipped_days = 0
     try:
         client = client or garmin_client.login()
 
@@ -37,8 +41,14 @@ def sync_garmin_range(days: int = 7, client=None, on_progress=None) -> dict:
             activities, endpoint="activities", key_field="activityId", recorded_at=now
         )
 
+        have = garmin_raw_repo.existing_ids("daily_stats") if skip_existing else set()
         for offset in range(days):
-            day = (date.today() - timedelta(days=offset)).isoformat()
+            day = (clock.local_today() - timedelta(days=offset)).isoformat()
+            if day in have:
+                skipped_days += 1
+                if on_progress:
+                    on_progress(offset + 1, days)
+                continue
             try:
                 stats = garmin_client.fetch_daily_stats(day, client=client)
             except Exception as exc:
@@ -56,9 +66,13 @@ def sync_garmin_range(days: int = 7, client=None, on_progress=None) -> dict:
 
         logger.info(
             "garmin", "sync_garmin_range complete",
-            {"days": days, "rows_written": written, "failed_days": failed_days},
+            {"days": days, "rows_written": written, "failed_days": failed_days,
+             "skipped_days": skipped_days},
         )
-        return {"ok": True, "rows_written": written, "failed_days": failed_days}
+        return {
+            "ok": True, "rows_written": written,
+            "failed_days": failed_days, "skipped_days": skipped_days,
+        }
     except Exception as exc:
         logger.error("garmin", "sync_garmin_range failed", {"days": days, "error": str(exc)})
         return {"ok": False, "error": str(exc), "rows_written": written}
@@ -68,7 +82,7 @@ def _whoop_windows(days: int, window: int = 30):
     """Yield non-overlapping (start, end) ISO-8601 UTC pairs spanning the last
     `days`, chunked into `window`-day slices. Chunking keeps each Whoop request
     well inside the client's pagination cap (25/page, 40 pages)."""
-    end = date.today()
+    end = clock.local_today()
     start = end - timedelta(days=days)
     cur = start
     while cur <= end:
@@ -115,20 +129,21 @@ def sync_whoop_last_7_days() -> dict:
     return sync_whoop_range(7)
 
 
-def sync_all_devices(days: int = 7, on_progress=None) -> dict:
+def sync_all_devices(days: int = 7, on_progress=None, skip_existing=False) -> dict:
     """Sync both devices over the last `days`. Each device's failure is
     isolated; the overall ok is true only if both succeeded. `on_progress`
     tracks the slow per-day Garmin loop (Whoop syncs in a few range calls)."""
-    garmin = sync_garmin_range(days, on_progress=on_progress)
+    garmin = sync_garmin_range(days, on_progress=on_progress, skip_existing=skip_existing)
     whoop = sync_whoop_range(days)
     return {"ok": garmin["ok"] and whoop["ok"], "garmin": garmin, "whoop": whoop}
 
 
 def backfill_all_devices(days: int = 365, on_progress=None) -> dict:
     """One-off historical pull: sync both devices over the last `days`
-    (default a full year). Same isolation rules as sync_all_devices."""
+    (default a full year). Days already stored are skipped, so a re-run only
+    fills the gaps. Same isolation rules as sync_all_devices."""
     logger.info("sync", "backfill_all_devices starting", {"days": days})
-    return sync_all_devices(days, on_progress=on_progress)
+    return sync_all_devices(days, on_progress=on_progress, skip_existing=True)
 
 
 def device_status() -> dict:
@@ -152,5 +167,6 @@ def device_status() -> dict:
             "connected": _safe(whoop_client.is_connected, False),
             "last_sync": _safe(whoop_raw_repo.latest_ingested_at),
             "rows": _safe(whoop_raw_repo.count),
+            "token_expires_at": _safe(whoop_client.token_expiry),
         },
     }

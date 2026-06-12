@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from clients import garmin_client, whoop_client
 from repositories import garmin_raw_repo, whoop_raw_repo
 from services import sync_service
@@ -145,18 +147,83 @@ def test_sync_garmin_range_reports_progress(monkeypatch):
     assert seen == [(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]
 
 
+def test_backfill_skips_days_already_stored(monkeypatch):
+    """A re-run after rate limiting should only fetch the gaps, not re-pull
+    every day's four endpoints."""
+    monkeypatch.setattr(garmin_client, "login", lambda: object())
+    monkeypatch.setattr(garmin_client, "fetch_recent_activities", lambda days, client=None: [])
+    fetched = []
+    monkeypatch.setattr(
+        garmin_client, "fetch_daily_stats",
+        lambda day, client=None: fetched.append(day) or {"date": day},
+    )
+    stored_day = (date.today() - timedelta(days=1)).isoformat()
+    monkeypatch.setattr(garmin_raw_repo, "existing_ids", lambda endpoint: {stored_day})
+    monkeypatch.setattr(
+        garmin_raw_repo, "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: len(records),
+    )
+    seen = []
+
+    result = sync_service.sync_garmin_range(
+        days=3, skip_existing=True, on_progress=lambda d, t: seen.append((d, t))
+    )
+
+    assert result["ok"] is True
+    assert stored_day not in fetched and len(fetched) == 2
+    assert result["skipped_days"] == 1
+    assert seen == [(1, 3), (2, 3), (3, 3)]  # progress still covers every day
+
+
+def test_routine_sync_never_skips_stored_days(monkeypatch):
+    """The default path re-pulls recent days so edits/late data refresh."""
+    monkeypatch.setattr(garmin_client, "login", lambda: object())
+    monkeypatch.setattr(garmin_client, "fetch_recent_activities", lambda days, client=None: [])
+    monkeypatch.setattr(garmin_client, "fetch_daily_stats", lambda day, client=None: {"date": day})
+    monkeypatch.setattr(
+        garmin_raw_repo, "existing_ids",
+        lambda endpoint: (_ for _ in ()).throw(AssertionError("must not be queried")),
+    )
+    monkeypatch.setattr(
+        garmin_raw_repo, "upsert_records",
+        lambda records, endpoint, key_field, recorded_at=None: len(records),
+    )
+
+    result = sync_service.sync_garmin_range(days=2)
+
+    assert result["ok"] is True
+    assert result["rows_written"] == 2
+
+
+def test_backfill_passes_skip_existing(monkeypatch):
+    captured = {}
+
+    def fake_garmin(days, on_progress=None, skip_existing=False):
+        captured["skip_existing"] = skip_existing
+        return {"ok": True}
+
+    monkeypatch.setattr(sync_service, "sync_garmin_range", fake_garmin)
+    monkeypatch.setattr(sync_service, "sync_whoop_range", lambda days, **kw: {"ok": True})
+
+    sync_service.backfill_all_devices(days=90)
+
+    assert captured["skip_existing"] is True
+
+
 def test_device_status_reports_counts_and_last_sync(monkeypatch):
     monkeypatch.setattr(garmin_raw_repo, "latest_ingested_at", lambda: "2026-06-01T06:30:00")
     monkeypatch.setattr(garmin_raw_repo, "count", lambda: 1234)
     monkeypatch.setattr(whoop_raw_repo, "latest_ingested_at", lambda: "2026-06-02T06:30:00")
     monkeypatch.setattr(whoop_raw_repo, "count", lambda: 567)
     monkeypatch.setattr(whoop_client, "is_connected", lambda: True)
+    monkeypatch.setattr(whoop_client, "token_expiry", lambda: "2026-06-02T08:00:00")
 
     status = sync_service.device_status()
 
     assert status["garmin"] == {"last_sync": "2026-06-01T06:30:00", "rows": 1234}
     assert status["whoop"] == {
         "connected": True, "last_sync": "2026-06-02T06:30:00", "rows": 567,
+        "token_expires_at": "2026-06-02T08:00:00",
     }
 
 
@@ -168,11 +235,14 @@ def test_device_status_survives_db_failure(monkeypatch):
         monkeypatch.setattr(repo, "latest_ingested_at", boom)
         monkeypatch.setattr(repo, "count", boom)
     monkeypatch.setattr(whoop_client, "is_connected", boom)
+    monkeypatch.setattr(whoop_client, "token_expiry", boom)
 
     status = sync_service.device_status()  # must not raise into the UI
 
     assert status["garmin"] == {"last_sync": None, "rows": None}
-    assert status["whoop"] == {"connected": False, "last_sync": None, "rows": None}
+    assert status["whoop"] == {
+        "connected": False, "last_sync": None, "rows": None, "token_expires_at": None,
+    }
 
 
 def test_backfill_defaults_to_a_year(monkeypatch):

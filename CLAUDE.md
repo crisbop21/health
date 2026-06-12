@@ -24,6 +24,7 @@ every push/PR. Keep it green; untested changes go red.
 
 ```
 pytest -q                                              # tests (run before committing)
+ruff check .                                           # lint (CI enforces it)
 python -m compileall -q clients core pages repositories services scripts streamlit_app.py
 streamlit run streamlit_app.py                         # run the app locally
 ```

@@ -67,21 +67,22 @@ def count() -> int:
     return resp.count or 0
 
 
-def records(endpoint: str) -> list[dict]:
-    """Return all stored Whoop records for an endpoint, oldest first, paging
-    past the per-response row cap so long histories replay in full. Each row
-    now holds a single record; legacy rows holding a `{records: [...]}` blob or
-    a list are flattened for backward compatibility."""
-    rows = fetch_all(
-        lambda: get_client()
-        .table("whoop_raw")
-        .select("payload")
-        .eq("endpoint", endpoint)
-        .order("ingested_at")
-        .order("id")
-    )
+def records(endpoint: str, since: str | None = None) -> list[dict]:
+    """Return stored Whoop records for an endpoint, oldest first, paging past
+    the per-response row cap so long histories replay in full. With `since`,
+    only rows recorded at/after that timestamp (the incremental-recompute
+    path). Each row now holds a single record; legacy rows holding a
+    `{records: [...]}` blob or a list are flattened for backward
+    compatibility."""
+
+    def query():
+        q = get_client().table("whoop_raw").select("payload").eq("endpoint", endpoint)
+        if since:
+            q = q.gte("recorded_at", since)
+        return q.order("ingested_at").order("id")
+
     out: list[dict] = []
-    for row in rows:
+    for row in fetch_all(query):
         payload = row.get("payload")
         if isinstance(payload, dict) and isinstance(payload.get("records"), list):
             out.extend(payload["records"])

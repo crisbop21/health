@@ -4,10 +4,9 @@ audit revision. Pure Python — no Streamlit."""
 
 from __future__ import annotations
 
-from datetime import date
 
 from clients import claude_client
-from core import guardrails, logger, pace_zones
+from core import clock, guardrails, logger, pace_zones
 from repositories import (
     daily_metrics_repo,
     goals_repo,
@@ -108,7 +107,7 @@ def recalibrate_plan(reason: str = "manual recalibration", recent_metrics=None) 
         latest = training_plan_repo.get_plan()
     except Exception as exc:
         return {"ok": False, "error": f"Could not load current plan: {exc}"}
-    today = date.today().isoformat()
+    today = clock.local_today().isoformat()
     current_remaining = [r for r in latest if (r.get("date") or "") >= today]
     if not current_remaining:
         return {"ok": False, "error": "No current plan to recalibrate. Generate one first."}
@@ -124,3 +123,12 @@ def recalibrate_plan(reason: str = "manual recalibration", recent_metrics=None) 
         return {"ok": False, "error": str(exc)}
 
     return _persist(result, goal, trigger="recalibration", reason=reason, recent_metrics=metrics)
+
+
+def current_plan() -> dict:
+    """The latest plan's rows for the Plan page. Never raises into the UI."""
+    try:
+        return {"ok": True, "rows": training_plan_repo.get_plan()}
+    except Exception as exc:
+        logger.warning("db", "plan load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc), "rows": []}

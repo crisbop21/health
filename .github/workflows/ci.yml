@@ -15,7 +15,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt ruff
+      - name: Lint (ruff)
+        run: ruff check .
       - name: Byte-compile (catches syntax errors in pages too)
         run: python -m compileall -q clients core pages repositories services scripts streamlit_app.py
       - name: Run tests

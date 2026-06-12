@@ -1,10 +1,10 @@
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
+from core import clock
 from core.auth import require_password
-from repositories import progress_tests_repo, training_plan_repo
 from services import plan_service, test_service
 
 require_password()
@@ -37,17 +37,16 @@ with c2:
         else:
             st.error(result.get("error", "Recalibration failed. See the Debug tab."))
 
-try:
-    rows = training_plan_repo.get_plan()
-except Exception as exc:
-    st.error(f"Could not load the plan: {exc}")
-    rows = []
+plan = plan_service.current_plan()
+rows = plan.get("rows", [])
+if not plan.get("ok"):
+    st.error(f"Could not load the plan: {plan.get('error')}")
 
 if not rows:
     st.info("No plan yet. Click **Generate plan** to create one from your active goal.")
     st.stop()
 
-today = date.today().isoformat()
+today = clock.local_today().isoformat()
 version = rows[0].get("version")
 df = pd.DataFrame(rows)
 
@@ -104,11 +103,10 @@ if st.button("Schedule progress tests"):
     else:
         st.error(result.get("error", "Scheduling failed. See the Debug tab."))
 
-try:
-    tests = progress_tests_repo.get_all()
-except Exception as exc:
-    tests = []
-    st.error(f"Could not load progress tests: {exc}")
+tests_result = test_service.all_tests()
+tests = tests_result.get("rows", [])
+if not tests_result.get("ok"):
+    st.error(f"Could not load progress tests: {tests_result.get('error')}")
 
 if not tests:
     st.caption("No progress tests yet. Click **Schedule progress tests**.")

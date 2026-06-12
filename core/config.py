@@ -74,6 +74,12 @@ class Settings:
         return _get("WHOOP_REDIRECT_URI", "http://localhost:8501")
 
     @property
+    def home_timezone(self) -> str | None:
+        """IANA timezone (e.g. America/Bogota) used to bucket device timestamps
+        and "today" onto the athlete's calendar days. Unset means UTC."""
+        return _get("HOME_TIMEZONE")
+
+    @property
     def app_password(self) -> str | None:
         return _get("APP_PASSWORD")
 

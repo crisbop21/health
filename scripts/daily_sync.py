@@ -11,14 +11,18 @@ before you've finished connecting things. Real failures trigger a webhook alert
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 
 from clients import notify_client
-from core import logger
+from core import clock, logger
 from services import metrics_service, sync_service
 
 # Default lookback for the routine sync. A week of overlap is cheap and heals
 # any days missed while the schedule was down.
 DEFAULT_DAYS = 7
+# Once a week (Monday), look further back so activities edited or uploaded
+# late on the device side get refreshed too.
+HEAL_DAYS = 60
 
 
 def _is_skip(error: str | None) -> bool:
@@ -27,16 +31,31 @@ def _is_skip(error: str | None) -> bool:
     return "not connected" in e or "not configured" in e
 
 
+def _needs_reconnect(error: str | None) -> bool:
+    """An auth failure means the stored token is expired/revoked — re-running
+    won't help; the user must reconnect the device in Settings."""
+    e = (error or "").lower()
+    return any(hint in e for hint in ("401", "unauthorized", "invalid_grant", "refresh token"))
+
+
 def run(days: int = DEFAULT_DAYS) -> dict:
+    if days == DEFAULT_DAYS and clock.local_today().weekday() == 0:
+        days = HEAL_DAYS
+        logger.info("sync", "weekly heal: extending lookback", {"days": days})
     logger.info("sync", "daily_sync starting", {"days": days})
+    started = datetime.now(timezone.utc).isoformat()
     sync = sync_service.sync_all_devices(days)
-    recompute = metrics_service.recompute_daily_metrics()
+    # Incremental: replay only the raw rows this sync recorded, not all history.
+    recompute = metrics_service.recompute_daily_metrics(since=started)
 
     problems: list[str] = []
     for name in ("garmin", "whoop"):
         d = sync.get(name, {})
         if not d.get("ok") and not _is_skip(d.get("error")):
-            problems.append(f"{name}: {d.get('error')}")
+            problem = f"{name}: {d.get('error')}"
+            if _needs_reconnect(d.get("error")):
+                problem += " — token expired/revoked; reconnect in Settings"
+            problems.append(problem)
     if not recompute.get("ok"):
         problems.append(f"recompute: {recompute.get('error')}")
 

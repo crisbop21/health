@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from core import logger
+from core import clock, logger
 from repositories import daily_metrics_repo, workouts_repo
 
 # Derived rows never predate device history; a fixed floor keeps the "all data"
@@ -27,7 +27,7 @@ _METRIC_FIELDS = tuple(METRIC_META)
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return clock.local_today().isoformat()
 
 
 def _span_days(first: str | None, last: str | None) -> int:
@@ -94,7 +94,7 @@ def snapshot() -> dict:
     for the KPI cards. ok=False with an error on failure."""
     try:
         rows = daily_metrics_repo.get_range(
-            (date.today() - timedelta(days=21)).isoformat(), _today()
+            (clock.local_today() - timedelta(days=21)).isoformat(), _today()
         )
         out: dict[str, dict] = {}
         for field in _METRIC_FIELDS:
@@ -129,7 +129,7 @@ def _window_start(days: int | None) -> str:
     """ISO start date for a rolling window; None means all history (epoch)."""
     if days is None:
         return _EPOCH
-    return (date.today() - timedelta(days=days)).isoformat()
+    return (clock.local_today() - timedelta(days=days)).isoformat()
 
 
 def metrics_series(days: int | None = 365) -> list[dict]:
@@ -140,3 +140,44 @@ def metrics_series(days: int | None = 365) -> list[dict]:
 def workouts_series(days: int | None = 365) -> list[dict]:
     """workout rows over the last `days` (None = everything), oldest first."""
     return workouts_repo.get_range(_window_start(days), _today())
+
+
+def training_load(days: int | None = 365) -> dict:
+    """Daily distance load with acute (7-day) and chronic (28-day) rolling
+    averages and their ratio (ACWR). Days without workouts count as zero load.
+    The commonly cited 0.8–1.3 "sweet spot" band is drawn by the UI. Returns
+    rows from the first workout in the window through today; ok=False on
+    failure."""
+    try:
+        rows = workouts_repo.get_range(_window_start(days), _today())
+        km_by_date: dict[str, float] = {}
+        for w in rows:
+            d = w.get("date")
+            if d:
+                km_by_date[d] = km_by_date.get(d, 0.0) + (w.get("distance_km") or 0.0)
+        if not km_by_date:
+            return {"ok": True, "rows": []}
+
+        out: list[dict] = []
+        loads: list[float] = []
+        cur = date.fromisoformat(min(km_by_date))
+        end = date.fromisoformat(_today())
+        while cur <= end:
+            iso = cur.isoformat()
+            loads.append(round(km_by_date.get(iso, 0.0), 3))
+            acute = sum(loads[-7:]) / min(len(loads), 7)
+            chronic = sum(loads[-28:]) / min(len(loads), 28)
+            out.append(
+                {
+                    "date": iso,
+                    "load_km": loads[-1],
+                    "acute": round(acute, 2),
+                    "chronic": round(chronic, 2),
+                    "acwr": round(acute / chronic, 2) if chronic > 0 else None,
+                }
+            )
+            cur += timedelta(days=1)
+        return {"ok": True, "rows": out}
+    except Exception as exc:
+        logger.error("calc", "training_load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc)}

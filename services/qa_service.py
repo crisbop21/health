@@ -3,10 +3,10 @@ Pure Python — no Streamlit."""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from clients import claude_client
-from core import logger
+from core import clock, logger
 from repositories import daily_metrics_repo, goals_repo, qa_log_repo, training_plan_repo
 
 
@@ -20,8 +20,8 @@ def _safe(fn, default):
 
 def _this_week_plan() -> list:
     plan = _safe(training_plan_repo.get_plan, [])
-    start = date.today().isoformat()
-    end = (date.today() + timedelta(days=7)).isoformat()
+    start = clock.local_today().isoformat()
+    end = (clock.local_today() + timedelta(days=7)).isoformat()
     return [r for r in plan if start <= (r.get("date") or "") <= end]
 
 
@@ -51,9 +51,18 @@ def ask(question: str) -> dict:
     return {"ok": True, "answer": result["answer"], "cost_usd": result.get("cost_usd")}
 
 
+def recent_questions(limit: int = 25) -> dict:
+    """The Q&A history for the Ask page. Never raises into the UI."""
+    try:
+        return {"ok": True, "rows": qa_log_repo.recent(limit)}
+    except Exception as exc:
+        logger.warning("db", "qa history load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc), "rows": []}
+
+
 def daily_status() -> dict:
     goal = _safe(goals_repo.get_active, None)
-    today = date.today().isoformat()
+    today = clock.local_today().isoformat()
     plan = _safe(training_plan_repo.get_plan, [])
     today_item = next((r for r in plan if r.get("date") == today), None)
     metrics = _safe(lambda: daily_metrics_repo.get_recent(1), [])

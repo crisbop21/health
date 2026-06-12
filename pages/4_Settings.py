@@ -145,6 +145,12 @@ with col_w:
         f"{'Connected' if w_status['connected'] else 'Not connected'} · "
         f"last sync: {_fmt_ts(w_status['last_sync'])} · {_fmt_rows(w_status['rows'])}"
     )
+    if w_status["connected"] and w_status.get("token_expires_at"):
+        st.caption(
+            f"Access token auto-refreshes (current one expires "
+            f"{_fmt_ts(w_status['token_expires_at'])}). If syncs start failing "
+            "with auth errors, reconnect here."
+        )
     if not w_status["connected"]:
         state = st.session_state.setdefault("whoop_oauth_state", secrets.token_urlsafe(16))
         st.link_button("Connect Whoop", whoop_client.authorize_url(state))
