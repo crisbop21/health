@@ -270,8 +270,20 @@ with tab_race:
             f"Riegel projections from your best efforts in the last "
             f"{proj.get('window_days')} days ({proj.get('runs_considered')} qualifying runs)."
         )
+    elif (w.get("count") or 0) == 0:
+        # Raw data may be synced, but the derived workouts were never built
+        # (e.g. an earlier recompute failed partway). Point at the actual fix.
+        st.warning(
+            "No workouts are built from your synced data yet. Run "
+            "**Settings → Recompute metrics** — if the count is still zero "
+            "afterwards, re-run the backfill (it only fetches what's missing)."
+        )
     else:
-        st.caption("Projections appear once you have synced runs of 5 km or more.")
+        st.caption(
+            "Projections appear once a run of 5 km or more lands in the last "
+            "90 days. Your workouts are in — check the Training volume section "
+            "below to confirm runs (not just other sports) are present."
+        )
 
     summary = goal_service.race_summary()
     target_km = summary.get("race_distance_km") or 42.195

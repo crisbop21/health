@@ -176,6 +176,55 @@ def test_raw_repo_counts(monkeypatch):
     assert whoop_raw_repo.count() == 7
 
 
+# --- Batch dedupe: one upsert can't touch the same row twice ----------------
+# Postgres rejects an upsert batch containing the same conflict key twice
+# (error 21000). Whatever the upstream source of duplicates (pagination drift,
+# legacy blobs), the repos must collapse them last-write-wins.
+
+def test_garmin_upsert_dedupes_batch(monkeypatch):
+    client = _patch(monkeypatch, garmin_raw_repo, [])
+    records = [{"activityId": 1, "v": "old"}, {"activityId": 2}, {"activityId": 1, "v": "new"}]
+
+    written = garmin_raw_repo.upsert_records(records, endpoint="activities", key_field="activityId")
+
+    assert written == 2
+    assert client.upsert_sizes == [2]
+
+
+def test_whoop_upsert_dedupes_batch(monkeypatch):
+    client = _patch(monkeypatch, whoop_raw_repo, [])
+    records = [{"id": "a", "v": 1}, {"id": "a", "v": 2}, {"id": "b"}]
+
+    written = whoop_raw_repo.upsert_records(records, endpoint="sleep")
+
+    assert written == 2
+    assert client.upsert_sizes == [2]
+
+
+def test_workouts_upsert_dedupes_batch(monkeypatch):
+    client = _patch(monkeypatch, workouts_repo, [])
+    rows = [
+        {"source": "garmin", "external_id": "1"},
+        {"source": "whoop", "external_id": "1"},  # different source: kept
+        {"source": "garmin", "external_id": "1"},  # duplicate: collapsed
+    ]
+
+    written = workouts_repo.upsert_many(rows)
+
+    assert written == 2
+    assert client.upsert_sizes == [2]
+
+
+def test_daily_metrics_upsert_dedupes_batch(monkeypatch):
+    client = _patch(monkeypatch, daily_metrics_repo, [])
+    rows = [{"date": "2026-06-01", "hrv_ms": 1}, {"date": "2026-06-01", "hrv_ms": 2}]
+
+    written = daily_metrics_repo.upsert_many(rows)
+
+    assert written == 1
+    assert client.upsert_sizes == [1]
+
+
 # --- Incremental reads (recorded_at watermark) ------------------------------
 
 def test_raw_reads_filter_by_since(monkeypatch):

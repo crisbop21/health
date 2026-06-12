@@ -6,7 +6,7 @@ day or activity overwrites rather than duplicates."""
 from __future__ import annotations
 
 
-from core.supabase_client import fetch_all, get_client
+from core.supabase_client import fetch_all, get_client, last_write_wins
 
 # Keep bulk upserts comfortably sized; a multi-year activity backfill can be
 # thousands of rows, too big for one request.
@@ -32,6 +32,7 @@ def upsert_records(records: list, endpoint: str, key_field: str, recorded_at: st
             }
         )
     written = 0
+    rows = last_write_wins(rows, key=lambda r: r["external_id"])
     for i in range(0, len(rows), _UPSERT_CHUNK):
         resp = (
             get_client()
