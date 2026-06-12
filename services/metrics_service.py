@@ -244,10 +244,16 @@ def recompute_daily_metrics(since: str | None = None) -> dict:
                 garmin_workouts.append(w)
 
         garmin_days = {w["date"] for w in garmin_workouts}
-        whoop_candidates = [
-            w for w in (_whoop_workout(r) for r in whoop_raw_repo.records("workout", since=since))
-            if w
-        ]
+        # Dedupe by id: legacy blob rows and per-record rows can repeat a
+        # workout, and one upsert batch must never carry the same
+        # (source, external_id) twice (Postgres error 21000).
+        whoop_candidates = []
+        seen_whoop: set = set()
+        for rec in whoop_raw_repo.records("workout", since=since):
+            w = _whoop_workout(rec)
+            if w and w["external_id"] not in seen_whoop:
+                seen_whoop.add(w["external_id"])
+                whoop_candidates.append(w)
         # In incremental mode the batch alone doesn't say whether Garmin owns a
         # day — check the stored workouts for the candidate days too.
         blocked_days = set(garmin_days)
