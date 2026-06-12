@@ -1,7 +1,6 @@
 import streamlit as st
 
 from core.auth import require_password
-from repositories import qa_log_repo
 from services import qa_service
 
 require_password()
@@ -20,11 +19,10 @@ if st.button("Ask", type="primary") and question.strip():
         st.error(result.get("error", "Question failed. See the Debug tab."))
 
 st.subheader("History")
-try:
-    history = qa_log_repo.recent(25)
-except Exception as exc:
-    history = []
-    st.error(f"Could not load history: {exc}")
+history_result = qa_service.recent_questions(25)
+history = history_result.get("rows", [])
+if not history_result.get("ok"):
+    st.error(f"Could not load history: {history_result.get('error')}")
 
 if not history:
     st.info("No questions yet.")

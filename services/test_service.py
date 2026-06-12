@@ -3,11 +3,10 @@ athlete logs the results. Pure Python — no Streamlit."""
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from clients import claude_client
-from core import logger
+from core import clock, logger
 from repositories import goals_repo, progress_tests_repo, training_plan_repo
 
 
@@ -26,7 +25,7 @@ def schedule_progress_tests() -> dict:
     if not dates:
         return {"ok": False, "error": "No plan to schedule tests against. Generate one first."}
 
-    today = date.today().isoformat()
+    today = clock.local_today().isoformat()
     window = {
         "start": max(today, min(dates)),
         "race_date": goal.get("race_date"),
@@ -66,3 +65,21 @@ def log_result(test_id: str, result_value: Any, notes: str | None = None) -> dic
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True}
+
+
+def all_tests() -> dict:
+    """Every progress test, for the Plan page. Never raises into the UI."""
+    try:
+        return {"ok": True, "rows": progress_tests_repo.get_all()}
+    except Exception as exc:
+        logger.warning("db", "progress tests load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc), "rows": []}
+
+
+def upcoming_tests(start: str, end: str) -> dict:
+    """Tests scheduled in [start, end], for the Today page. Never raises."""
+    try:
+        return {"ok": True, "rows": progress_tests_repo.upcoming(start, end)}
+    except Exception as exc:
+        logger.warning("db", "upcoming tests load failed", {"error": str(exc)})
+        return {"ok": False, "error": str(exc), "rows": []}

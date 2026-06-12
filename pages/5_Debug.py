@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import streamlit as st
 
 from core.auth import require_password
-from repositories import debug_log_repo
+from services import log_service
 
 require_password()
 
@@ -18,16 +18,15 @@ limit = c4.number_input("Limit", min_value=10, max_value=2000, value=200, step=5
 
 since_iso = datetime.combine(since_date, time.min, tzinfo=timezone.utc).isoformat()
 
-try:
-    rows = debug_log_repo.recent(
-        limit=int(limit),
-        severity=None if severity == "all" else severity,
-        source=None if source == "all" else source,
-        since=since_iso,
-    )
-except Exception as exc:
-    st.error(f"Could not load debug_log: {exc}")
-    rows = []
+log_result = log_service.recent_logs(
+    limit=int(limit),
+    severity=None if severity == "all" else severity,
+    source=None if source == "all" else source,
+    since=since_iso,
+)
+rows = log_result.get("rows", [])
+if not log_result.get("ok"):
+    st.error(f"Could not load debug_log: {log_result.get('error')}")
 
 if not rows:
     st.info("No log rows in this window.")

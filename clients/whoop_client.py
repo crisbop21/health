@@ -118,6 +118,13 @@ def is_connected() -> bool:
     return bool(row and row.get("refresh_token"))
 
 
+def token_expiry() -> str | None:
+    """When the stored access token expires (it auto-refreshes; this is shown
+    in Settings as a health signal)."""
+    row = oauth_tokens_repo.get(PROVIDER)
+    return row.get("expires_at") if row else None
+
+
 # --- Reads ---------------------------------------------------------------
 
 def _request_get(path: str, params: dict, token: str) -> dict:

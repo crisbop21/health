@@ -5,7 +5,6 @@ day or activity overwrites rather than duplicates."""
 
 from __future__ import annotations
 
-from typing import Any
 
 from core.supabase_client import fetch_all, get_client
 
@@ -44,18 +43,31 @@ def upsert_records(records: list, endpoint: str, key_field: str, recorded_at: st
     return written
 
 
-def payloads(endpoint: str) -> list:
-    """Return all stored payloads for an endpoint, oldest first, paging past
-    the per-response row cap so long histories replay in full."""
+def payloads(endpoint: str, since: str | None = None) -> list:
+    """Return stored payloads for an endpoint, oldest first, paging past the
+    per-response row cap so long histories replay in full. With `since`, only
+    rows recorded at/after that timestamp (the incremental-recompute path)."""
+
+    def query():
+        q = get_client().table("garmin_raw").select("payload").eq("endpoint", endpoint)
+        if since:
+            q = q.gte("recorded_at", since)
+        return q.order("ingested_at").order("id")
+
+    return [row.get("payload") for row in fetch_all(query)]
+
+
+def existing_ids(endpoint: str) -> set[str]:
+    """The external_ids already stored for an endpoint. Lets a backfill skip
+    re-fetching days it already holds (daily_stats keys on the date)."""
     rows = fetch_all(
         lambda: get_client()
         .table("garmin_raw")
-        .select("payload")
+        .select("external_id")
         .eq("endpoint", endpoint)
-        .order("ingested_at")
         .order("id")
     )
-    return [row.get("payload") for row in rows]
+    return {row["external_id"] for row in rows if row.get("external_id")}
 
 
 def count() -> int:

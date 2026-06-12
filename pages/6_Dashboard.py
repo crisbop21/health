@@ -77,6 +77,11 @@ def _workouts(days):
     return dashboard_service.workouts_series(days=days)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _training_load(days):
+    return dashboard_service.training_load(days=days)
+
+
 # --- Controls -------------------------------------------------------------
 PERIODS = {"30d": 30, "90d": 90, "6mo": 180, "1yr": 365, "2yr": 730, "All": None}
 ctrl_l, ctrl_r = st.columns([4, 1])
@@ -168,12 +173,19 @@ def _empty(title: str, height: int = 200):
 
 def _trend_chart(col: str, title: str, color: str, bands=None, rule=None):
     """Daily points + a 7-day rolling-average line, with optional zone bands
-    (list of (low, high, color)) and a reference rule value."""
+    (list of (low, high, color)) and a reference rule value. Windows longer
+    than ~400 days are downsampled to weekly means so multi-year views stay
+    fast and readable."""
     if df.empty or col not in df or not df[col].notna().any():
         _empty(title)
         return
     d = df[[col]].dropna().reset_index()
-    d["roll"] = d[col].rolling(7, min_periods=1).mean()
+    weekly = len(d) > 400
+    if weekly:
+        d = d.set_index("date")[col].resample("W").mean().dropna().reset_index()
+        d["roll"] = d[col].rolling(4, min_periods=1).mean()
+    else:
+        d["roll"] = d[col].rolling(7, min_periods=1).mean()
 
     layers = []
     if bands:
@@ -204,7 +216,12 @@ def _trend_chart(col: str, title: str, color: str, bands=None, rule=None):
     )
     st.altair_chart(alt.layer(*layers, points, line).properties(height=200), use_container_width=True)
     vals = d[col]
-    st.caption(f"avg {vals.mean():.1f} · min {vals.min():.1f} · max {vals.max():.1f} · {len(vals)} days · solid line = 7-day avg")
+    unit = "weeks" if weekly else "days"
+    line_label = "4-week avg of weekly means" if weekly else "7-day avg"
+    st.caption(
+        f"avg {vals.mean():.1f} · min {vals.min():.1f} · max {vals.max():.1f} · "
+        f"{len(vals)} {unit} · solid line = {line_label}"
+    )
 
 
 st.subheader("Trends")
@@ -228,6 +245,40 @@ with tab_sleep:
 
 with tab_train:
     _trend_chart("strain", "Strain", "#ef6c00")
+
+    load = _training_load(days)
+    lrows = [r for r in load.get("rows", []) if r.get("acwr") is not None] if load.get("ok") else []
+    if lrows:
+        st.markdown("**Acute:chronic workload ratio (ACWR)**")
+        ldf = pd.DataFrame(lrows)
+        ldf["date"] = pd.to_datetime(ldf["date"])
+        band = (
+            alt.Chart(pd.DataFrame({"low": [0.8], "high": [1.3]}))
+            .mark_rect(opacity=0.08, color="green")
+            .encode(y="low:Q", y2="high:Q")
+        )
+        line = (
+            alt.Chart(ldf)
+            .mark_line(color="#ef6c00", strokeWidth=2)
+            .encode(
+                x=alt.X("date:T", title=None),
+                y=alt.Y("acwr:Q", title="ACWR", scale=alt.Scale(zero=False)),
+                tooltip=[
+                    alt.Tooltip("date:T"),
+                    alt.Tooltip("acwr:Q", title="ACWR", format=".2f"),
+                    alt.Tooltip("acute:Q", title="acute (7d km/d)", format=".1f"),
+                    alt.Tooltip("chronic:Q", title="chronic (28d km/d)", format=".1f"),
+                ],
+            )
+        )
+        st.altair_chart(alt.layer(band, line).properties(height=200), use_container_width=True)
+        st.caption(
+            "7-day vs 28-day average distance load. The shaded 0.8–1.3 band is "
+            "the commonly cited sweet spot — sustained spikes above ~1.5 raise "
+            "injury risk; well below 0.8 means detraining."
+        )
+    elif load.get("ok"):
+        st.caption("Not enough workout data for a load ratio yet.")
 
 
 # --- Training volume ------------------------------------------------------

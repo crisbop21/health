@@ -136,3 +136,51 @@ def test_series_all_history(monkeypatch):
     assert dashboard_service.workouts_series(days=None) == WORKOUTS
     assert captured["metrics_start"] == "2000-01-01"
     assert captured["workouts_start"] == "2000-01-01"
+
+
+def test_training_load_acwr(monkeypatch):
+    from datetime import date, timedelta
+
+    day0 = (date.today() - timedelta(days=9)).isoformat()
+    monkeypatch.setattr(
+        workouts_repo, "get_range", lambda s, e: [{"date": day0, "distance_km": 14.0}]
+    )
+
+    result = dashboard_service.training_load(days=30)
+
+    assert result["ok"] is True
+    rows = result["rows"]
+    assert len(rows) == 10  # day0 .. today inclusive
+    first, last = rows[0], rows[-1]
+    # Day 1: acute and chronic windows both contain only the 14 km -> ratio 1.
+    assert first["load_km"] == 14.0
+    assert first["acwr"] == 1.0
+    # Today: nothing in the last 7 days (acute 0), chronic 14/10 -> ratio 0.
+    assert last["load_km"] == 0.0
+    assert last["acute"] == 0.0
+    assert last["chronic"] == 1.4
+    assert last["acwr"] == 0.0
+
+
+def test_training_load_handles_no_distance_and_empty(monkeypatch):
+    from datetime import date, timedelta
+
+    day0 = (date.today() - timedelta(days=1)).isoformat()
+    # A strength workout with no distance -> zero load -> chronic 0 -> no ratio.
+    monkeypatch.setattr(
+        workouts_repo, "get_range", lambda s, e: [{"date": day0, "distance_km": None}]
+    )
+    rows = dashboard_service.training_load()["rows"]
+    assert rows[0]["acwr"] is None
+
+    monkeypatch.setattr(workouts_repo, "get_range", lambda s, e: [])
+    assert dashboard_service.training_load() == {"ok": True, "rows": []}
+
+
+def test_training_load_failure(monkeypatch):
+    monkeypatch.setattr(
+        workouts_repo, "get_range", lambda s, e: (_ for _ in ()).throw(RuntimeError("db down"))
+    )
+    result = dashboard_service.training_load()
+    assert result["ok"] is False
+    assert "db down" in result["error"]

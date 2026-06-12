@@ -2,15 +2,21 @@
 
 Source-of-truth rules (from the technical brief):
 - HRV, recovery, sleep: Whoop wins; Garmin is fallback.
-- Workouts, distance, pace: Garmin wins.
+- Workouts, distance, pace: Garmin wins a day; Whoop workouts fill days where
+  Garmin recorded nothing (so a forgotten watch doesn't blank the day).
 
-A recompute replays all stored raw data, so derived rows can be rebuilt at any
-time. Parsers are defensive about missing keys — a device only contributes the
-fields it actually returned."""
+Dates are bucketed in the home timezone (core.clock), so UTC timestamps land
+on the athlete's calendar day.
+
+A full recompute replays all stored raw data, so derived rows can be rebuilt
+at any time. Parsers are defensive about missing keys — a device only
+contributes the fields it actually returned."""
 
 from __future__ import annotations
 
-from core import logger, pace_zones
+from datetime import datetime
+
+from core import clock, logger, pace_zones
 from repositories import (
     daily_metrics_repo,
     garmin_raw_repo,
@@ -20,7 +26,16 @@ from repositories import (
 
 
 def _date_of(iso_ts: str | None) -> str | None:
-    return iso_ts[:10] if iso_ts else None
+    return clock.local_date_of(iso_ts)
+
+
+def _seconds_between(start: str | None, end: str | None) -> int | None:
+    try:
+        s = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        return int((e - s).total_seconds())
+    except (AttributeError, ValueError, TypeError):
+        return None
 
 
 def _empty(day: str) -> dict:
@@ -94,7 +109,10 @@ def _avg_pace(distance_km: float | None, duration_seconds: float | None) -> str 
 
 def _garmin_activity(act: dict) -> dict | None:
     day = _date_of(act.get("startTimeLocal") or act.get("startTimeGMT"))
-    if not day:
+    aid = act.get("activityId")
+    # No activityId means no stable identity to upsert on; skip rather than
+    # accumulate duplicates (Garmin always assigns one in practice).
+    if not day or aid is None:
         return None
     distance_m = act.get("distance")
     distance_km = round(distance_m / 1000, 3) if distance_m else None
@@ -108,17 +126,51 @@ def _garmin_activity(act: dict) -> dict | None:
         "avg_hr": act.get("averageHR"),
         "max_hr": act.get("maxHR"),
         "source": "garmin",
+        "external_id": str(aid),
+    }
+
+
+def _whoop_workout(rec: dict) -> dict | None:
+    day = _date_of(rec.get("start"))
+    wid = rec.get("id")
+    if not day or wid is None:
+        return None
+    score = rec.get("score") or {}
+    distance_m = score.get("distance_meter")
+    distance_km = round(distance_m / 1000, 3) if distance_m else None
+    duration_seconds = _seconds_between(rec.get("start"), rec.get("end"))
+    sport = rec.get("sport_name")
+    if not sport and rec.get("sport_id") is not None:
+        sport = f"sport_{rec['sport_id']}"
+    return {
+        "date": day,
+        "sport": sport,
+        "distance_km": distance_km,
+        "duration_seconds": duration_seconds,
+        "avg_pace": _avg_pace(distance_km, duration_seconds),
+        "avg_hr": score.get("average_heart_rate"),
+        "max_hr": score.get("max_heart_rate"),
+        "source": "whoop",
+        "external_id": str(wid),
     }
 
 
 # --- Recompute -----------------------------------------------------------
 
-def recompute_daily_metrics() -> dict:
-    """Rebuild daily_metrics and Garmin-sourced workouts from raw data."""
+def recompute_daily_metrics(since: str | None = None) -> dict:
+    """Rebuild daily_metrics and workouts from raw data.
+
+    Full mode (since=None) replays everything and replaces all derived workout
+    rows — the correctness backstop, used by the Settings buttons. Incremental
+    mode (since = ISO timestamp) replays only raw rows recorded at/after the
+    watermark — the cheap nightly path after a sync, which stays O(new data)
+    instead of O(entire history). Caveat: if a device failed for a day inside
+    the sync window, that day's rebuilt row can briefly lack that device's
+    fields until a successful re-sync or full recompute."""
     try:
         by_date: dict[str, dict] = {}
 
-        for rec in whoop_raw_repo.records("recovery"):
+        for rec in whoop_raw_repo.records("recovery", since=since):
             day = _date_of(rec.get("created_at"))
             if not day:
                 continue
@@ -132,7 +184,7 @@ def recompute_daily_metrics() -> dict:
             if parsed["recovery_score"] is not None:
                 m["recovery_score"] = parsed["recovery_score"]
 
-        for rec in whoop_raw_repo.records("sleep"):
+        for rec in whoop_raw_repo.records("sleep", since=since):
             if rec.get("nap"):
                 continue
             day = _date_of(rec.get("end") or rec.get("start"))
@@ -142,14 +194,14 @@ def recompute_daily_metrics() -> dict:
                 m["sleep_hours"] = hours
                 m["source_sleep"] = "whoop"
 
-        for rec in whoop_raw_repo.records("cycle"):
+        for rec in whoop_raw_repo.records("cycle", since=since):
             day = _date_of(rec.get("start"))
             strain = _whoop_strain(rec)
             if day and strain is not None:
                 by_date.setdefault(day, _empty(day))["strain"] = strain
 
         # Garmin fills gaps Whoop didn't cover.
-        for payload in garmin_raw_repo.payloads("daily_stats"):
+        for payload in garmin_raw_repo.payloads("daily_stats", since=since):
             if not isinstance(payload, dict):
                 continue
             day = payload.get("date")
@@ -171,29 +223,47 @@ def recompute_daily_metrics() -> dict:
 
         metrics_written = daily_metrics_repo.upsert_many(list(by_date.values()))
 
-        # Workouts: Garmin wins. Each raw row is now a single activity, but stay
-        # tolerant of legacy list/blob rows. Dedupe by activityId so re-synced
-        # activities never become duplicate workout rows.
+        # Workouts: Garmin wins a day; Whoop fills Garmin-less days. Each raw
+        # row is now a single activity, but stay tolerant of legacy list/blob
+        # rows. Dedupe by activityId so re-synced activities never become
+        # duplicate workout rows.
         activities: list = []
-        for payload in garmin_raw_repo.payloads("activities"):
+        for payload in garmin_raw_repo.payloads("activities", since=since):
             if isinstance(payload, list):
                 activities.extend(payload)
             elif isinstance(payload, dict):
                 activities.append(payload)
         seen: set = set()
-        unique_activities = []
+        garmin_workouts = []
         for a in activities:
-            if not isinstance(a, dict):
+            if not isinstance(a, dict) or a.get("activityId") in seen:
                 continue
-            aid = a.get("activityId")
-            key = aid if aid is not None else id(a)
-            if key in seen:
-                continue
-            seen.add(key)
-            unique_activities.append(a)
-        workouts = [w for w in (_garmin_activity(a) for a in unique_activities) if w]
-        workouts_repo.delete_source("garmin")
-        workouts_written = workouts_repo.insert_many(workouts)
+            seen.add(a.get("activityId"))
+            w = _garmin_activity(a)
+            if w:
+                garmin_workouts.append(w)
+
+        garmin_days = {w["date"] for w in garmin_workouts}
+        whoop_candidates = [
+            w for w in (_whoop_workout(r) for r in whoop_raw_repo.records("workout", since=since))
+            if w
+        ]
+        # In incremental mode the batch alone doesn't say whether Garmin owns a
+        # day — check the stored workouts for the candidate days too.
+        blocked_days = set(garmin_days)
+        if since is not None:
+            candidate_days = sorted({w["date"] for w in whoop_candidates} - garmin_days)
+            blocked_days |= workouts_repo.dates_with_source("garmin", candidate_days)
+        whoop_workouts = [w for w in whoop_candidates if w["date"] not in blocked_days]
+
+        if since is None:
+            # Full rebuild: clear both sources so upstream deletions disappear.
+            workouts_repo.delete_source("garmin")
+            workouts_repo.delete_source("whoop")
+        elif garmin_days:
+            # Garmin data arriving for a day displaces any Whoop fallback rows.
+            workouts_repo.delete_source_dates("whoop", sorted(garmin_days))
+        workouts_written = workouts_repo.upsert_many(garmin_workouts + whoop_workouts)
 
         logger.info(
             "calc",
